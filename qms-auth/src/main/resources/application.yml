@@ -1,0 +1,21 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: qms-auth
+  datasource:
+    url: jdbc:mariadb://localhost:3306/bank_qms_auth?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=UTF-8
+    username: root
+    password: asahimaww1
+    driver-class-name: org.mariadb.jdbc.Driver
+  jpa:
+    ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+      format_sql: true
+
+jwt:
+  secret: YmFua1Ftc0JlU2VjcmV0S2V5TXVzdEJlQXRMZWFzdDMyQnl0ZXM=
+  expiration: 3600000

@@ -1,0 +1,39 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: qms-gateway
+  cloud:
+    gateway:
+      routes:
+        - id: qms-auth
+          uri: http://localhost:8081
+          predicates:
+            - Path=/api/v1/auth/**
+        - id: qms-management
+          uri: http://localhost:8082
+          predicates:
+            - Path=/api/v1/management/**
+        - id: qms-ticket
+          uri: http://localhost:8083
+          predicates:
+            - Path=/api/v1/ticket/**
+        - id: qms-realtime
+          uri: http://localhost:8084
+          predicates:
+            - Path=/api/v1/realtime/**
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowedOrigins: "*"
+            allowedMethods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - OPTIONS
+            allowedHeaders: "*"
+
+jwt:
+  secret: YmFua1Ftc0JlU2VjcmV0S2V5TXVzdEJlQXRMZWFzdDMyQnl0ZXM=

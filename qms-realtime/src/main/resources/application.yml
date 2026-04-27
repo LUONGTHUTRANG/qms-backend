@@ -1,0 +1,10 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: qms-realtime
+  redis:
+    host: localhost
+    port: 6379
+
