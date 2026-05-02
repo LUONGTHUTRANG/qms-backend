@@ -15,4 +15,6 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
     List<Ticket> findByBranchIdAndBusinessDateAndStatus(Long branchId, LocalDate businessDate, TicketStatus status);
     Optional<Ticket> findByBranchIdAndBusinessDateAndTicketNo(Long branchId, LocalDate businessDate, String ticketNo);
     Optional<Ticket> findFirstByCurrentCounterIdAndStatusInOrderByUpdatedAtDesc(Long currentCounterId, List<TicketStatus> statuses);
+    List<Ticket> findByCurrentCounterIdAndStatusAndBusinessDate(Long currentCounterId, TicketStatus status, LocalDate businessDate);
+    List<Ticket> findByCurrentCounterIdAndStatusInAndBusinessDate(Long currentCounterId, List<TicketStatus> statuses, LocalDate businessDate);
 }

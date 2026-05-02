@@ -12,6 +12,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.example.ticket.dto.QueueItemDto;
 import org.example.ticket.context.UserContextHolder;
+import org.example.ticket.dto.TicketTransferRequest;
+import org.example.ticket.dto.SessionInfoDto;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -52,9 +54,9 @@ public class TicketController {
     @PutMapping("/{id}/status")
     public ApiResponse<TicketDto> updateStatus(
             @PathVariable("id") Long id,
-            @RequestBody TicketStatus status) {
+            @RequestBody org.example.ticket.dto.TicketStatusUpdateRequest request) {
         Long userId = UserContextHolder.getUserId();
-        return ApiResponse.success(service.updateStatus(id, status, userId), "Ticket status updated");
+        return ApiResponse.success(service.updateStatus(id, request.getStatus(), userId, request.getReasonId(), request.getReason()), "Ticket status updated");
     }
 
     @PostMapping("/{id}/rejoin")
@@ -67,10 +69,9 @@ public class TicketController {
     @PostMapping("/{id}/transfer")
     public ApiResponse<TicketDto> transferTicket(
             @PathVariable("id") Long id,
-            @RequestParam("newRequestGroupId") Long newRequestGroupId,
-            @RequestParam(value = "newServiceTypeId", required = false) Long newServiceTypeId) {
+            @RequestBody TicketTransferRequest request) {
         Long userId = UserContextHolder.getUserId();
-        return ApiResponse.success(service.transferTicket(id, newRequestGroupId, newServiceTypeId, userId));
+        return ApiResponse.success(service.transferTicket(id, request.getNewRequestGroupId(), request.getNewServiceTypeId(), userId, request.getReasonId(), request.getReason()));
     }
 
     @GetMapping("/next-in-queue")
@@ -101,5 +102,11 @@ public class TicketController {
     public ApiResponse<List<String>> getCounterSubscriptionTopics() {
         Long userId = UserContextHolder.getUserId();
         return ApiResponse.success(service.getSubscriptionTopics(userId));
+    }
+
+    @GetMapping("/session-info")
+    public ApiResponse<SessionInfoDto> getSessionInfo() {
+        Long userId = UserContextHolder.getUserId();
+        return ApiResponse.success(service.getSessionInfo(userId), "Session information retrieved successfully");
     }
 }

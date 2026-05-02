@@ -58,7 +58,9 @@ public class TicketEvent {
     @Column(name = "new_service_type_id")
     private Long newServiceTypeId;
 
+    @Column(name = "reason_id")
+    private Long reasonId;
+
     @Column(length = 255)
     private String note;
 }
-

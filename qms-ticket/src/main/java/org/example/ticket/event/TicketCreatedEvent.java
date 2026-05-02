@@ -8,12 +8,14 @@ import org.springframework.context.ApplicationEvent;
 public class TicketCreatedEvent extends ApplicationEvent {
     private final Ticket ticket;
     private final boolean isTransfer;
+    private final boolean hasTransferBonus;
     private final Integer oldTotalScore; // Used specifically for rejoin/transfer logic
 
     public TicketCreatedEvent(Object source, Ticket ticket) {
         super(source);
         this.ticket = ticket;
         this.isTransfer = false;
+        this.hasTransferBonus = false;
         this.oldTotalScore = null;
     }
     
@@ -21,7 +23,15 @@ public class TicketCreatedEvent extends ApplicationEvent {
         super(source);
         this.ticket = ticket;
         this.isTransfer = isTransfer;
+        this.hasTransferBonus = isTransfer; // Backward compatible (SERVING transfer had it true)
+        this.oldTotalScore = oldTotalScore;
+    }
+
+    public TicketCreatedEvent(Object source, Ticket ticket, boolean isTransfer, boolean hasTransferBonus, Integer oldTotalScore) {
+        super(source);
+        this.ticket = ticket;
+        this.isTransfer = isTransfer;
+        this.hasTransferBonus = hasTransferBonus;
         this.oldTotalScore = oldTotalScore;
     }
 }
-

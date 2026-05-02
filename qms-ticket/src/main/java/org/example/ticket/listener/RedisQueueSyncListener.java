@@ -33,7 +33,10 @@ public class RedisQueueSyncListener {
         try {
             if (event.isTransfer()) {
                 // Chính sách 5: Chuyển quầy
-                totalScore = event.getOldTotalScore() + 50;
+                totalScore = event.getOldTotalScore();
+                if (event.isHasTransferBonus()) {
+                    totalScore += 50;
+                }
                 log.info("Ticket {} transferred. Total Score: {}", ticket.getTicketNo(), totalScore);
 
             } else if (event.getOldTotalScore() != null) {

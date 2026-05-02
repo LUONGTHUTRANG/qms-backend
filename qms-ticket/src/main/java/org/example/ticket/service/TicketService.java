@@ -10,6 +10,7 @@ import org.example.ticket.client.dto.CustomerSegmentConfigDto;
 import org.example.ticket.dto.QueueItemDto;
 import org.example.ticket.dto.TicketCreateRequest;
 import org.example.ticket.dto.TicketDto;
+import org.example.ticket.dto.SessionInfoDto;
 import org.example.ticket.entity.Ticket;
 import org.example.ticket.entity.TicketEvent;
 import org.example.ticket.entity.TicketSequence;
@@ -17,6 +18,8 @@ import org.example.ticket.entity.TicketSequenceId;
 import org.example.ticket.entity.enums.TicketEventType;
 import org.example.ticket.entity.enums.TicketStatus;
 import org.example.ticket.event.TicketCreatedEvent;
+import org.example.ticket.event.TicketStatusChangedEvent;
+import org.example.ticket.event.TicketRemovedFromQueueEvent;
 import org.example.ticket.repository.TicketEventRepository;
 import org.example.ticket.repository.TicketRepository;
 import org.example.ticket.repository.TicketSequenceRepository;
@@ -134,12 +137,17 @@ public class TicketService {
     }
 
     @Transactional
-    public TicketDto updateStatus(Long ticketId, TicketStatus newStatus, Long userId) {
-        return updateStatusWithCounter(ticketId, newStatus, userId, null);
+    public TicketDto updateStatus(Long ticketId, TicketStatus newStatus, Long userId, Long reasonId, String note) {
+        return updateStatusWithCounter(ticketId, newStatus, userId, null, reasonId, note);
     }
 
     @Transactional
     public TicketDto updateStatusWithCounter(Long ticketId, TicketStatus newStatus, Long userId, Long knownCounterId) {
+        return updateStatusWithCounter(ticketId, newStatus, userId, knownCounterId, null, null);
+    }
+
+    @Transactional
+    public TicketDto updateStatusWithCounter(Long ticketId, TicketStatus newStatus, Long userId, Long knownCounterId, Long reasonId, String note) {
         Ticket ticket = ticketRepository.findById(ticketId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "Ticket not found"));
 
@@ -189,8 +197,12 @@ public class TicketService {
                 .fromStatus(oldStatus)
                 .toStatus(newStatus)
                 .performedByUserId(userId)
+                .reasonId(reasonId)
+                .note(note)
                 .build();
         ticketEventRepository.save(event);
+
+        boolean removedFromQueue = false;
 
         if (newStatus == TicketStatus.SKIPPED_HOLD) {
              // Policy 3: Skip (Lỡ lượt không thấy -> Xóa Queue và Giữ chỗ 15p)
@@ -201,10 +213,22 @@ public class TicketService {
                   // Cất điểm chờ để nhỡ người dùng replay lại policy 4 - Chứa vô WaitCredit
                   ticket.setWaitCreditSeconds(currentScore.intValue());
                   redisQueueService.removeTicketFromQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
+                  removedFromQueue = true;
              }
         } else if (newStatus == TicketStatus.CANCELLED || newStatus == TicketStatus.DONE || newStatus == TicketStatus.SERVING) {
              redisQueueService.removeTicketFromQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
+             removedFromQueue = true;
+        } else if (newStatus == TicketStatus.CALLED) {
+             // Khi được gọi, loại bỏ khỏi queue (vé đã được gọi)
+             redisQueueService.removeTicketFromQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
+             removedFromQueue = true;
         }
+
+        eventPublisher.publishEvent(new TicketStatusChangedEvent(this, ticket, oldStatus));
+
+        // if (removedFromQueue) {
+        //     eventPublisher.publishEvent(new TicketRemovedFromQueueEvent(this, ticket, newStatus));
+        // }
 
         return mapToDto(ticket);
     }
@@ -246,23 +270,27 @@ public class TicketService {
 
     // Chính sách 5: Chuyển dịch vụ (Forward Quầy)
     @Transactional
-    public TicketDto transferTicket(Long ticketId, Long newRequestGroupId, Long newServiceTypeId, Long userId) {
+    public TicketDto transferTicket(Long ticketId, Long newRequestGroupId, Long newServiceTypeId, Long userId, Long reasonId, String note) {
          Ticket ticket = ticketRepository.findById(ticketId)
                  .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "Ticket not found"));
 
-         if (ticket.getStatus() != TicketStatus.SERVING) {
-             throw new BusinessException(HttpStatus.BAD_REQUEST, "Only SERVING ticket can be transferred");
+         TicketStatus oldStatus = ticket.getStatus();
+         if (oldStatus != TicketStatus.SERVING && oldStatus != TicketStatus.WAITING && oldStatus != TicketStatus.CALLED) {
+             throw new BusinessException(HttpStatus.BAD_REQUEST, "Ticket in status " + oldStatus + " cannot be transferred");
          }
-
-         // Try checking if it's stored in score, if it was serving it might have been removed.
-         // Realistically, when calling SERVING, the ticket is removed from redis!
-         // Wait, if it was SERVING, it was removed. We don't have its score anymore unless we save it.
-         // Let's deduce an estimated score or assume standard priority bonus.
-         int oldTotalScore = ticket.getWaitCreditSeconds() != null && ticket.getWaitCreditSeconds() < 0 ? -ticket.getWaitCreditSeconds() : 0;
 
          Long oldRgId = ticket.getRequestGroupId();
          Long oldSvcId = ticket.getServiceTypeId();
-         TicketStatus oldStatus = ticket.getStatus();
+
+         // Lấy điểm số cũ của ticket để xác định score
+         Double currentScore = redisQueueService.getTicketScore(ticket.getBranchId(), oldRgId, ticket.getCustomerSegmentId(), ticket.getId());
+         int oldTotalScore = currentScore != null ? currentScore.intValue() : 
+                 (ticket.getWaitCreditSeconds() != null && ticket.getWaitCreditSeconds() < 0 ? -ticket.getWaitCreditSeconds() : 0);
+
+         // Xóa vé khỏi hàng đợi hiện tại (nếu nó đang nằm trong đó, vd: WAITING, CALLED)
+         if (oldStatus == TicketStatus.WAITING || oldStatus == TicketStatus.CALLED) {
+             redisQueueService.removeTicketFromQueue(ticket.getBranchId(), oldRgId, ticket.getCustomerSegmentId(), ticket.getId());
+         }
 
          ticket.setRequestGroupId(newRequestGroupId);
          ticket.setServiceTypeId(newServiceTypeId);
@@ -279,10 +307,20 @@ public class TicketService {
                  .oldServiceTypeId(oldSvcId)
                  .newServiceTypeId(newServiceTypeId)
                  .performedByUserId(userId)
+                 .reasonId(reasonId)
+                 .note(note)
                  .build();
          ticketEventRepository.save(event);
 
-         eventPublisher.publishEvent(new TicketCreatedEvent(this, ticket, true, oldTotalScore));
+         // Nếu đang từ SERVING chuyển đi, cộng thêm bằng cách set cờ hoặc báo true
+         boolean addTransferBonus = (oldStatus == TicketStatus.SERVING);
+         eventPublisher.publishEvent(new TicketCreatedEvent(this, ticket, true, addTransferBonus, oldTotalScore));
+         
+         // Publish event khi remove khỏi queue (transfer từ WAITING hoặc CALLED)
+         if (oldStatus == TicketStatus.WAITING || oldStatus == TicketStatus.CALLED) {
+             eventPublisher.publishEvent(new TicketRemovedFromQueueEvent(this, ticket, TicketStatus.WAITING));
+         }
+         
          return mapToDto(ticket);
     }
 
@@ -447,7 +485,90 @@ public class TicketService {
         }
         return topics;
     }
+
+    public SessionInfoDto getSessionInfo(Long userId) {
+        // B1: Lấy active session của userId
+        CounterSessionDto session = null;
+        try {
+            session = authClient.getActiveSession(userId).getData();
+        } catch (FeignException e) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "User does not have an active counter session");
+        }
+
+        if (session == null || session.getCounterId() == null) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "User does not have an active counter session");
+        }
+
+        Long counterId = session.getCounterId();
+        LocalDate today = LocalDate.now();
+
+        // B2: Đếm số ticket WAITING trong hàng đợi
+        List<QueueItemDto> waitingTickets = getNextTicketsForCounter(userId);
+        int waitingCount = waitingTickets != null ? waitingTickets.size() : 0;
+
+        // B3: Lấy danh sách ticket DONE thuộc phiên hiện tại (currentCounterId = counterId)
+        List<Ticket> completedTickets = ticketRepository.findByCurrentCounterIdAndStatusAndBusinessDate(
+                counterId,
+                TicketStatus.DONE,
+                today
+        );
+
+        int completedCount = completedTickets.size();
+
+        // B4: Tính tổng thời gian phiên
+        long sessionDurationSeconds = 0;
+        LocalDateTime now = LocalDateTime.now();
+
+        // B4.1: Tính thời gian cho ticket DONE (từ lastCalledAt → doneAt)
+        if (completedTickets != null && !completedTickets.isEmpty()) {
+            for (Ticket ticket : completedTickets) {
+                if (ticket.getLastCalledAt() != null && ticket.getDoneAt() != null) {
+                    long seconds = java.time.temporal.ChronoUnit.SECONDS.between(
+                            ticket.getLastCalledAt(),
+                            ticket.getDoneAt()
+                    );
+                    sessionDurationSeconds += seconds;
+                }
+            }
+        }
+
+        // B4.2: Tính thời gian cho ticket SERVING và CALLED (từ lastCalledAt → hiện tại)
+        List<Ticket> ongoingTickets = ticketRepository.findByCurrentCounterIdAndStatusInAndBusinessDate(
+                counterId,
+                java.util.Arrays.asList(TicketStatus.SERVING, TicketStatus.CALLED),
+                today
+        );
+
+        if (ongoingTickets != null && !ongoingTickets.isEmpty()) {
+            for (Ticket ticket : ongoingTickets) {
+                if (ticket.getLastCalledAt() != null) {
+                    long seconds = java.time.temporal.ChronoUnit.SECONDS.between(
+                            ticket.getLastCalledAt(),
+                            now
+                    );
+                    sessionDurationSeconds += seconds;
+                }
+            }
+        }
+
+        // B5: Build response
+        return SessionInfoDto.builder()
+                .counterId(counterId)
+                .userId(userId)
+                .waitingCount(waitingCount)
+                .completedCount(completedCount)
+                .sessionDurationSeconds(sessionDurationSeconds)
+                .build();
+    }
 }
+
+
+
+
+
+
+
+
 
 
 
