@@ -7,6 +7,7 @@ import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 
 @Service
@@ -14,9 +15,14 @@ import java.util.Set;
 public class RedisQueueService {
     private final RedisTemplate<String, Object> redisTemplate;
     private static final String QUEUE_PREFIX = "qms:queue:";
+    private static final String SUSPEND_QUEUE_PREFIX = "qms:suspend_queue:";
 
     public String buildQueueKey(Long branchId, Long requestGroupId, Long segmentId) {
         return QUEUE_PREFIX + branchId + ":" + requestGroupId + ":" + (segmentId != null ? segmentId : "0");
+    }
+
+    public String buildSuspendQueueKey(Long branchId, Long requestGroupId, Long segmentId) {
+        return SUSPEND_QUEUE_PREFIX + branchId + ":" + requestGroupId + ":" + (segmentId != null ? segmentId : "0");
     }
 
     public void addTicketToQueue(Long branchId, Long requestGroupId, Long segmentId, Long ticketId, double score) {
@@ -41,13 +47,59 @@ public class RedisQueueService {
         return redisTemplate.opsForZSet().rangeWithScores(key, 0, -1);
     }
 
+    // Methods for Suspend Queue (SKIPPED_HOLD tickets) - Using Hash instead of ZSet
+    // Structure: Hash with field=ticketId, value=score
+    public void addTicketToSuspendQueue(Long branchId, Long requestGroupId, Long segmentId, Long ticketId, double score) {
+        String key = buildSuspendQueueKey(branchId, requestGroupId, segmentId);
+        redisTemplate.opsForHash().put(key, ticketId.toString(), String.valueOf(score));
+    }
+
+    public void removeTicketFromSuspendQueue(Long branchId, Long requestGroupId, Long segmentId, Long ticketId) {
+        String key = buildSuspendQueueKey(branchId, requestGroupId, segmentId);
+        redisTemplate.opsForHash().delete(key, ticketId.toString());
+    }
+
+    public Double getTicketScoreInSuspendQueue(Long branchId, Long requestGroupId, Long segmentId, Long ticketId) {
+        String key = buildSuspendQueueKey(branchId, requestGroupId, segmentId);
+        Object value = redisTemplate.opsForHash().get(key, ticketId.toString());
+        if (value != null) {
+            try {
+                return Double.parseDouble(value.toString());
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    public Map<Object, Object> getTicketsInSuspendQueue(Long branchId, Long requestGroupId, Long segmentId) {
+        String key = buildSuspendQueueKey(branchId, requestGroupId, segmentId);
+        return redisTemplate.opsForHash().entries(key);
+    }
+
+    public boolean isTicketInSuspendQueue(Long branchId, Long requestGroupId, Long segmentId, Long ticketId) {
+        String key = buildSuspendQueueKey(branchId, requestGroupId, segmentId);
+        return redisTemplate.opsForHash().hasKey(key, ticketId.toString());
+    }
+
     // API Cho Policy Chống Đói (Tăng ++ cho Toàn bộ queue)
     public Set<String> getAllQueueKeys() {
         return redisTemplate.keys(QUEUE_PREFIX + "*");
     }
 
+    public Set<String> getAllSuspendQueueKeys() {
+        return redisTemplate.keys(SUSPEND_QUEUE_PREFIX + "*");
+    }
+
     public void clearAllQueues() {
         Set<String> keys = getAllQueueKeys();
+        if (keys != null && !keys.isEmpty()) {
+            redisTemplate.delete(keys);
+        }
+    }
+
+    public void clearAllSuspendQueues() {
+        Set<String> keys = getAllSuspendQueueKeys();
         if (keys != null && !keys.isEmpty()) {
             redisTemplate.delete(keys);
         }

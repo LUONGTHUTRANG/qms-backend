@@ -82,8 +82,27 @@ public class WebSocketNotifierListener {
             Map<String, Object> payload = new HashMap<>();
             payload.put("action", "TICKET_STATUS_CHANGED");
             payload.put("ticketId", ticket.getId());
+            payload.put("ticketNo", ticket.getTicketNo());
             payload.put("oldStatus", oldStatus.name());
             payload.put("newStatus", newStatus.name());
+
+            // Include queue item data fields - flattened into payload
+            if (event.getQueueItemData() != null) {
+                payload.put("score", event.getQueueItemData().getScore());
+                payload.put("requestGroupId", event.getQueueItemData().getRequestGroupId());
+                payload.put("requestGroupName", event.getQueueItemData().getRequestGroupName());
+                payload.put("segmentId", event.getQueueItemData().getSegmentId());
+                payload.put("segmentCode", event.getQueueItemData().getSegmentCode());
+                payload.put("segmentName", event.getQueueItemData().getSegmentName());
+                payload.put("skipExpireAt", event.getQueueItemData().getSkipExpireAt());
+                payload.put("rejoinCount", event.getQueueItemData().getRejoinCount());
+            } else {
+                // Fallback: provide basic queue information from ticket
+                payload.put("requestGroupId", ticket.getRequestGroupId());
+                payload.put("segmentId", ticket.getCustomerSegmentId());
+                payload.put("skipExpireAt", ticket.getSkipExpireAt());
+                payload.put("rejoinCount", ticket.getRejoinCount());
+            }
 
             String json = objectMapper.writeValueAsString(payload);
             redisTemplate.convertAndSend(channel, json);

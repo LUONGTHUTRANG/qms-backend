@@ -80,6 +80,12 @@ public class TicketController {
         return ApiResponse.success(service.getNextTicketsForCounter(userId));
     }
 
+    @GetMapping("/suspended-tickets")
+    public ApiResponse<List<org.example.ticket.dto.SuspendedQueueItemDto>> getSuspendedTicketsForCounter() {
+        Long userId = UserContextHolder.getUserId();
+        return ApiResponse.success(service.getSuspendedTicketsForCounter(userId));
+    }
+
     @GetMapping("/top-in-queue")
     public ApiResponse<QueueItemDto> getTopTicketForCounter() {
         Long userId = UserContextHolder.getUserId();

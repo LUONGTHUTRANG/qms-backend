@@ -8,6 +8,7 @@ import org.example.ticket.client.dto.CounterSessionDto;
 import org.example.ticket.client.dto.ServiceCounterDto;
 import org.example.ticket.client.dto.CustomerSegmentConfigDto;
 import org.example.ticket.dto.QueueItemDto;
+import org.example.ticket.dto.SuspendedQueueItemDto;
 import org.example.ticket.dto.TicketCreateRequest;
 import org.example.ticket.dto.TicketDto;
 import org.example.ticket.dto.SessionInfoDto;
@@ -32,7 +33,9 @@ import feign.FeignException;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -136,6 +139,61 @@ public class TicketService {
         return mapToDto(ticket);
     }
 
+    // Helper method to build queue item data for TicketStatusChangedEvent
+    private TicketStatusChangedEvent buildTicketStatusChangedEvent(Ticket ticket, TicketStatus oldStatus) {
+        Long requestGroupId = ticket.getRequestGroupId();
+        String requestGroupName = "Unknown";
+        Long segmentId = ticket.getCustomerSegmentId();
+        String segmentCode = null;
+        String segmentName = null;
+        Double score = null;
+
+        try {
+            // Get request group name
+            requestGroupName = managementClient.getRequestGroup(requestGroupId).getData().getName();
+        } catch (Exception ignored) {
+        }
+
+        // Get score from Redis queue or suspend queue
+        try {
+            score = redisQueueService.getTicketScore(ticket.getBranchId(), requestGroupId, segmentId, ticket.getId());
+            if (score == null) {
+                // Try suspend queue
+                score = redisQueueService.getTicketScoreInSuspendQueue(ticket.getBranchId(), requestGroupId, segmentId, ticket.getId());
+            }
+        } catch (Exception ignored) {
+        }
+
+        // Get segment info
+        if (segmentId != null) {
+            try {
+                CustomerSegmentConfigDto segment = managementClient.getCustomerSegment(segmentId).getData();
+                if (segment != null) {
+                    segmentCode = segment.getCode();
+                    segmentName = segment.getName();
+                    segmentId = segment.getId();
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        // Build SuspendedQueueItemDto with complete ticket queue information
+        SuspendedQueueItemDto queueItemData = SuspendedQueueItemDto.builder()
+                .ticketId(ticket.getId())
+                .ticketNo(ticket.getTicketNo())
+                .score(score)
+                .requestGroupId(requestGroupId)
+                .requestGroupName(requestGroupName)
+                .segmentId(segmentId)
+                .segmentCode(segmentCode)
+                .segmentName(segmentName)
+                .skipExpireAt(ticket.getSkipExpireAt())
+                .rejoinCount(ticket.getRejoinCount())
+                .build();
+
+        return new TicketStatusChangedEvent(this, ticket, oldStatus, queueItemData);
+    }
+
     @Transactional
     public TicketDto updateStatus(Long ticketId, TicketStatus newStatus, Long userId, Long reasonId, String note) {
         return updateStatusWithCounter(ticketId, newStatus, userId, null, reasonId, note);
@@ -205,14 +263,33 @@ public class TicketService {
         boolean removedFromQueue = false;
 
         if (newStatus == TicketStatus.SKIPPED_HOLD) {
+            if (ticket.getRejoinCount() >= 1) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST, "Vé không thể được tạm hoãn do đã vượt quá số lần tạm hoãn quy định.");
+            }
              // Policy 3: Skip (Lỡ lượt không thấy -> Xóa Queue và Giữ chỗ 15p)
              ticket.setSkipExpireAt(LocalDateTime.now().plusMinutes(15));
 
              Double currentScore = redisQueueService.getTicketScore(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
+             
              if (currentScore != null) {
-                  // Cất điểm chờ để nhỡ người dùng replay lại policy 4 - Chứa vô WaitCredit
+                  // Vé vẫn nằm trong queue - lưu điểm và xóa khỏi queue
                   ticket.setWaitCreditSeconds(currentScore.intValue());
                   redisQueueService.removeTicketFromQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
+             } else {
+                  // Vé đã không nằm trong queue (ví dụ: từ CALLED hoặc SERVING) - tính toán score mới
+                  // Sử dụng waitCreditSeconds nếu đã tồn tại, hoặc tính từ thời gian chờ đợi
+                  if (ticket.getWaitCreditSeconds() != null && ticket.getWaitCreditSeconds() != 0) {
+                       currentScore = (double) Math.abs(ticket.getWaitCreditSeconds());
+                  } else {
+                       // Nếu không có waitCreditSeconds, tính dựa trên thời gian chờ (từ lúc tạo đến giờ)
+                       long waitTimeInSeconds = java.time.temporal.ChronoUnit.SECONDS.between(ticket.getCreatedAt(), LocalDateTime.now());
+                       currentScore = -(double) waitTimeInSeconds; // Lưu ở dạng âm giống queue
+                  }
+             }
+             
+             // Luôn thêm vé vào suspend queue (dù vé có từ queue hay không)
+             if (currentScore != null) {
+                  redisQueueService.addTicketToSuspendQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId(), currentScore);
                   removedFromQueue = true;
              }
         } else if (newStatus == TicketStatus.CANCELLED || newStatus == TicketStatus.DONE || newStatus == TicketStatus.SERVING) {
@@ -224,7 +301,7 @@ public class TicketService {
              removedFromQueue = true;
         }
 
-        eventPublisher.publishEvent(new TicketStatusChangedEvent(this, ticket, oldStatus));
+        eventPublisher.publishEvent(buildTicketStatusChangedEvent(ticket, oldStatus));
 
         // if (removedFromQueue) {
         //     eventPublisher.publishEvent(new TicketRemovedFromQueueEvent(this, ticket, newStatus));
@@ -245,6 +322,10 @@ public class TicketService {
 
          if (ticket.getRejoinCount() >= 1 || (ticket.getSkipExpireAt() != null && LocalDateTime.now().isAfter(ticket.getSkipExpireAt()))) {
              ticket.setStatus(TicketStatus.SKIPPED_EXPIRED);
+             
+             // Xóa khỏi suspend queue nếu đã hết hạn
+             redisQueueService.removeTicketFromSuspendQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
+             
              ticketRepository.save(ticket);
              throw new BusinessException(HttpStatus.BAD_REQUEST, "Ticket exceeded skip retry count or expired");
          }
@@ -254,6 +335,9 @@ public class TicketService {
          ticket.setRejoinCount(ticket.getRejoinCount() + 1);
          Integer oldScore = (ticket.getWaitCreditSeconds() != null && ticket.getWaitCreditSeconds() < 0) ? -ticket.getWaitCreditSeconds() : 0;
          ticket = ticketRepository.save(ticket);
+         
+         // Xóa khỏi suspend queue
+         redisQueueService.removeTicketFromSuspendQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
 
          TicketEvent event = TicketEvent.builder()
                  .ticket(ticket)
@@ -264,7 +348,9 @@ public class TicketService {
                  .build();
          ticketEventRepository.save(event);
 
-         eventPublisher.publishEvent(new TicketCreatedEvent(this, ticket, false, oldScore));
+         // Publish TicketStatusChangedEvent to notify status change from SKIPPED_HOLD to WAITING
+         eventPublisher.publishEvent(buildTicketStatusChangedEvent(ticket, oldStatus));
+        eventPublisher.publishEvent(new TicketCreatedEvent(this, ticket, false, oldScore));
          return mapToDto(ticket);
     }
 
@@ -415,6 +501,95 @@ public class TicketService {
         return queue.get(0);
     }
 
+    public List<org.example.ticket.dto.SuspendedQueueItemDto> getSuspendedTicketsForCounter(Long userId) {
+        // B1: Lấy counterId từ auth service
+        CounterSessionDto session = null;
+        try {
+            session = authClient.getActiveSession(userId).getData();
+        } catch (FeignException e) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "User does not have an active counter session");
+        }
+
+        if (session == null || session.getCounterId() == null) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "User does not have an active counter session");
+        }
+
+        // B2: Lấy branch và danh sách các requestGroupId mà quầy này có thể phục vụ
+        ServiceCounterDto counter = managementClient.getServiceCounter(session.getCounterId()).getData();
+        if (counter == null || counter.getRequestGroupIds() == null || counter.getRequestGroupIds().isEmpty()
+            || counter.getCustomerSegmentIds() == null || counter.getCustomerSegmentIds().isEmpty()) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "Counter is not configured to serve any request groups or customer segments");
+        }
+
+        List<org.example.ticket.dto.SuspendedQueueItemDto> masterSuspendQueue = new java.util.ArrayList<>();
+        java.util.Map<Long, String> requestGroupNameCache = new java.util.HashMap<>();
+
+        // B3: Lấy dữ liệu từ Redis suspend queue (Hash structure)
+        for (Long rgId : counter.getRequestGroupIds()) {
+            String rgName = requestGroupNameCache.computeIfAbsent(rgId, id -> {
+                try {
+                    return managementClient.getRequestGroup(id).getData().getName();
+                } catch (Exception e) {
+                    return "Unknown";
+                }
+            });
+
+            for (Long segmentId : counter.getCustomerSegmentIds()) {
+                Map<Object, Object> suspendQueueHash = redisQueueService.getTicketsInSuspendQueue(counter.getBranchId(), rgId, segmentId);
+                if (suspendQueueHash != null && !suspendQueueHash.isEmpty()) {
+                    for (Map.Entry<Object, Object> entry : suspendQueueHash.entrySet()) {
+                        String tIdStr = entry.getKey().toString();
+                        Double score = 0.0;
+                        try {
+                            score = Double.parseDouble(entry.getValue().toString());
+                        } catch (NumberFormatException e) {
+                            score = 0.0;
+                        }
+
+                        masterSuspendQueue.add(org.example.ticket.dto.SuspendedQueueItemDto.builder()
+                                .ticketId(Long.valueOf(tIdStr))
+                                .score(score)
+                                .requestGroupId(rgId)
+                                .requestGroupName(rgName)
+                                .build());
+                    }
+                }
+            }
+        }
+
+        // Sort theo score descending
+        masterSuspendQueue.sort((q1, q2) -> Double.compare(q2.getScore(), q1.getScore()));
+
+        java.util.Map<Long, CustomerSegmentConfigDto> segmentCache = new java.util.HashMap<>();
+
+        // Lấy thêm thông tin từ DB (ticketNo, segment, skipExpireAt, rejoinCount)
+        for (org.example.ticket.dto.SuspendedQueueItemDto item : masterSuspendQueue) {
+             ticketRepository.findById(item.getTicketId()).ifPresent(t -> {
+                 item.setTicketNo(t.getTicketNo());
+                 item.setSkipExpireAt(t.getSkipExpireAt());
+                 item.setRejoinCount(t.getRejoinCount());
+
+                 Long segId = t.getCustomerSegmentId();
+                 if (segId != null) {
+                     CustomerSegmentConfigDto seg = segmentCache.computeIfAbsent(segId, id -> {
+                         try {
+                             return managementClient.getCustomerSegment(id).getData();
+                         } catch (Exception e) {
+                             return null;
+                         }
+                     });
+                     if (seg != null) {
+                         item.setSegmentId(seg.getId());
+                         item.setSegmentCode(seg.getCode());
+                         item.setSegmentName(seg.getName());
+                     }
+                 }
+             });
+        }
+
+        return masterSuspendQueue;
+    }
+
     @Transactional
     public TicketDto callNextTicket(Long userId) {
         // Fetch session once to optimize and avoid duplicate cross-service auth calls
@@ -561,15 +736,5 @@ public class TicketService {
                 .build();
     }
 }
-
-
-
-
-
-
-
-
-
-
 
 
