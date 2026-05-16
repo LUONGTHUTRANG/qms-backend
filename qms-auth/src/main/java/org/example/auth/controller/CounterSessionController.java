@@ -34,4 +34,9 @@ public class CounterSessionController {
          Long userId = UserContextHolder.getUserId();
          return ApiResponse.success(sessionService.getActiveSessionByUserId(userId));
     }
+
+    @PostMapping("/end")
+    public ApiResponse<CounterSessionDto> endSession() {
+        return ApiResponse.success(sessionService.endSession(), "Counter session ended successfully");
+    }
 }

@@ -80,4 +80,21 @@ public class CounterSessionService {
                  .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "User has no active counter session"));
          return mapToDto(session);
     }
+
+    @Transactional
+    public CounterSessionDto endSession() {
+        UserContext ctx = UserContextHolder.getContext();
+        if (ctx == null) {
+            throw new BusinessException(HttpStatus.UNAUTHORIZED, "User authentication context is missing or invalid");
+        }
+        Long currentUserId = ctx.getUserId();
+
+        CounterSession session = sessionRepository.findByUserIdAndStatus(currentUserId, CounterSessionStatus.ACTIVE)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "User has no active counter session"));
+
+        session.setStatus(CounterSessionStatus.CLOSED);
+        session.setEndedAt(LocalDateTime.now());
+
+        return mapToDto(sessionRepository.save(session));
+    }
 }

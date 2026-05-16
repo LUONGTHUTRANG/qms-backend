@@ -3,20 +3,17 @@ package org.example.ticket.controller;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.example.common.dto.ApiResponse;
-import org.example.ticket.dto.TicketCreateRequest;
-import org.example.ticket.dto.TicketDto;
+import org.example.ticket.dto.*;
 import org.example.ticket.entity.enums.TicketStatus;
 import org.example.ticket.service.TicketService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
-import org.example.ticket.dto.QueueItemDto;
 import org.example.ticket.context.UserContextHolder;
-import org.example.ticket.dto.TicketTransferRequest;
-import org.example.ticket.dto.SessionInfoDto;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/ticket/tickets")
@@ -114,5 +111,17 @@ public class TicketController {
     public ApiResponse<SessionInfoDto> getSessionInfo() {
         Long userId = UserContextHolder.getUserId();
         return ApiResponse.success(service.getSessionInfo(userId), "Session information retrieved successfully");
+    }
+
+    @GetMapping("/counters-current")
+    public ApiResponse<Map<Long, Map<String, Object>>> getTicketsForCounters(
+            @RequestParam("counterIds") List<Long> counterIds) {
+        return ApiResponse.success(service.getTicketsForCountersAsMap(counterIds));
+    }
+
+    @PostMapping("/list-by-status")
+    public ApiResponse<List<TicketDto>> getTicketsByStatusAndCounter(
+            @Valid @RequestBody TicketListRequest request) {
+        return ApiResponse.success(service.getTicketsByStatusAndCounter(request.getStatus(), request.getCounterId()));
     }
 }

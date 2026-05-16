@@ -21,6 +21,21 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
     List<Ticket> findByCurrentCounterIdAndStatusAndBusinessDate(Long currentCounterId, TicketStatus status, LocalDate businessDate);
     List<Ticket> findByCurrentCounterIdAndStatusInAndBusinessDate(Long currentCounterId, List<TicketStatus> statuses, LocalDate businessDate);
     
+    @Query("SELECT t FROM Ticket t WHERE t.currentCounterId IN :counterIds AND t.status IN :statuses")
+    List<Ticket> findByCurrentCounterIdsAndStatuses(
+            @Param("counterIds") List<Long> counterIds,
+            @Param("statuses") List<TicketStatus> statuses
+    );
+
+    @Query("SELECT t FROM Ticket t WHERE t.status = :status ORDER BY t.lastCalledAt DESC NULLS LAST")
+    List<Ticket> findByStatusOrderByLastCalledAtDesc(@Param("status") TicketStatus status);
+
+    @Query("SELECT t FROM Ticket t WHERE t.status = :status AND t.currentCounterId = :counterId ORDER BY t.lastCalledAt DESC NULLS LAST")
+    List<Ticket> findByStatusAndCurrentCounterIdOrderByLastCalledAtDesc(
+            @Param("status") TicketStatus status,
+            @Param("counterId") Long counterId
+    );
+
     @Query("SELECT t FROM Ticket t WHERE t.status = 'SKIPPED_HOLD' AND t.skipExpireAt IS NOT NULL AND t.skipExpireAt <= :now")
     List<Ticket> findExpiredSkipHoldTickets(@Param("now") LocalDateTime now);
 }

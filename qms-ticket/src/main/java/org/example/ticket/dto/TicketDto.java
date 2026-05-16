@@ -1,7 +1,5 @@
 package org.example.ticket.dto;
 
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -30,6 +28,7 @@ public class TicketDto {
     private Integer waitCreditSeconds;
     private Integer callAttemptCount;
     private Long currentCounterId;
+    private String currentCounterCode;
     private LocalDateTime lastCalledAt;
     private LocalDateTime servingAt;
     private LocalDateTime doneAt;

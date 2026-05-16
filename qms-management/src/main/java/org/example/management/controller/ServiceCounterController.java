@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.example.common.dto.ApiResponse;
 import org.example.management.dto.ServiceCounterDto;
+import org.example.management.dto.ServiceCounterWithTicketDto;
 import org.example.management.service.ServiceCounterService;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -27,6 +28,12 @@ public class ServiceCounterController {
         return ApiResponse.success(service.getByBranchId(branchId));
     }
 
+    @GetMapping("/by-branch/{branchId}/with-tickets")
+    public ApiResponse<List<ServiceCounterWithTicketDto>> getCountersByBranchWithTickets(
+            @PathVariable("branchId") Long branchId) {
+        return ApiResponse.success(service.getCountersByBranchWithTickets(branchId));
+    }
+
     @GetMapping("/{id}")
     public ApiResponse<ServiceCounterDto> getById(@PathVariable("id") Long id) {
         return ApiResponse.success(service.getById(id));
@@ -43,4 +50,5 @@ public class ServiceCounterController {
         return ApiResponse.success(service.update(id, dto), "Updated service counter successfully");
     }
 }
+
 

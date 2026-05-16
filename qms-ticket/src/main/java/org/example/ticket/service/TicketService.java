@@ -64,6 +64,17 @@ public class TicketService {
     }
 
     private TicketDto mapToDto(Ticket entity) {
+        String counterCode = null;
+
+        // Lấy counter code nếu có currentCounterId
+        if (entity.getCurrentCounterId() != null) {
+            try {
+                counterCode = managementClient.getServiceCounter(entity.getCurrentCounterId()).getData().getCode();
+            } catch (Exception ignored) {
+                // Nếu không lấy được code, để null
+            }
+        }
+
         return TicketDto.builder()
                 .id(entity.getId())
                 .branchId(entity.getBranchId())
@@ -79,6 +90,7 @@ public class TicketService {
                 .waitCreditSeconds(entity.getWaitCreditSeconds())
                 .callAttemptCount(entity.getCallAttemptCount())
                 .currentCounterId(entity.getCurrentCounterId())
+                .currentCounterCode(counterCode)
                 .lastCalledAt(entity.getLastCalledAt())
                 .servingAt(entity.getServingAt())
                 .doneAt(entity.getDoneAt())
@@ -735,6 +747,114 @@ public class TicketService {
                 .sessionDurationSeconds(sessionDurationSeconds)
                 .build();
     }
+
+    // Lấy danh sách vé hiện tại cho nhiều quầy (tối ưu hóa - 1 query thay vì gọi lần lượt)
+    public Map<Long, TicketDto> getTicketsForCounters(List<Long> counterIds) {
+        if (counterIds == null || counterIds.isEmpty()) {
+            return new java.util.HashMap<>();
+        }
+
+        // Lấy vé CALLED hoặc SERVING cho các quầy này
+        List<Ticket> tickets = ticketRepository.findByCurrentCounterIdsAndStatuses(
+                counterIds,
+                java.util.Arrays.asList(TicketStatus.CALLED, TicketStatus.SERVING)
+        );
+
+        // Tạo map: counterId -> TicketDto (lấy ticket mới nhất cho mỗi quầy)
+        Map<Long, TicketDto> counterTicketMap = new java.util.HashMap<>();
+        for (Ticket ticket : tickets) {
+            // Nếu quầy chưa có vé, hoặc vé mới này được cập nhật gần đây hơn, thì cập nhật
+            if (!counterTicketMap.containsKey(ticket.getCurrentCounterId()) ||
+                    ticket.getUpdatedAt() != null &&
+                    counterTicketMap.get(ticket.getCurrentCounterId()).getId() != null) {
+                counterTicketMap.put(ticket.getCurrentCounterId(), mapToDto(ticket));
+            }
+        }
+
+        return counterTicketMap;
+    }
+
+    // Lấy danh sách vé hiện tại cho nhiều quầy dưới dạng Map<Long, Map<String, Object>> (để tối ưu hóa gọi từ qms-management)
+    public Map<Long, Map<String, Object>> getTicketsForCountersAsMap(List<Long> counterIds) {
+        Map<Long, TicketDto> ticketDtoMap = getTicketsForCounters(counterIds);
+
+        Map<Long, Map<String, Object>> result = new java.util.HashMap<>();
+        ticketDtoMap.forEach((counterId, ticketDto) -> {
+            if (ticketDto != null) {
+                Map<String, Object> ticketMap = new java.util.HashMap<>();
+                // Chỉ lấy 3 fields cần thiết
+                ticketMap.put("id", ticketDto.getId());
+                ticketMap.put("ticketNo", ticketDto.getTicketNo());
+                ticketMap.put("status", ticketDto.getStatus());
+
+                result.put(counterId, ticketMap);
+            }
+        });
+
+        return result;
+    }
+
+    /**
+     * Lấy danh sách ticket theo trạng thái, có thể filter theo counterId
+     * Order theo lastCalledAt (gần nhất ở đầu)
+     * Cache counter code để tối ưu
+     */
+    public List<TicketDto> getTicketsByStatusAndCounter(TicketStatus status, Long counterId) {
+        List<Ticket> tickets;
+
+        if (counterId != null) {
+            // Filter theo counterId
+            tickets = ticketRepository.findByStatusAndCurrentCounterIdOrderByLastCalledAtDesc(status, counterId);
+        } else {
+            // Lấy full không filter
+            tickets = ticketRepository.findByStatusOrderByLastCalledAtDesc(status);
+        }
+
+        // Cache để lấy code một lần
+        java.util.Map<Long, String> counterCodeCache = new java.util.HashMap<>();
+
+        return tickets.stream()
+                .map(ticket -> {
+                    String counterCode = null;
+                    if (ticket.getCurrentCounterId() != null) {
+                        // Check cache trước
+                        if (counterCodeCache.containsKey(ticket.getCurrentCounterId())) {
+                            counterCode = counterCodeCache.get(ticket.getCurrentCounterId());
+                        } else {
+                            // Gọi API lấy code
+                            try {
+                                counterCode = managementClient.getServiceCounter(ticket.getCurrentCounterId()).getData().getCode();
+                                counterCodeCache.put(ticket.getCurrentCounterId(), counterCode);
+                            } catch (Exception ignored) {
+                                counterCodeCache.put(ticket.getCurrentCounterId(), null);
+                            }
+                        }
+                    }
+
+                    // Build DTO with cached counter code
+                    return TicketDto.builder()
+                            .id(ticket.getId())
+                            .branchId(ticket.getBranchId())
+                            .businessDate(ticket.getBusinessDate())
+                            .ticketNo(ticket.getTicketNo())
+                            .requestGroupId(ticket.getRequestGroupId())
+                            .serviceTypeId(ticket.getServiceTypeId())
+                            .customerSegmentId(ticket.getCustomerSegmentId())
+                            .phoneNumber(ticket.getPhoneNumber())
+                            .status(ticket.getStatus())
+                            .rejoinCount(ticket.getRejoinCount())
+                            .skipExpireAt(ticket.getSkipExpireAt())
+                            .waitCreditSeconds(ticket.getWaitCreditSeconds())
+                            .callAttemptCount(ticket.getCallAttemptCount())
+                            .currentCounterId(ticket.getCurrentCounterId())
+                            .currentCounterCode(counterCode)
+                            .lastCalledAt(ticket.getLastCalledAt())
+                            .servingAt(ticket.getServingAt())
+                            .doneAt(ticket.getDoneAt())
+                            .cancelledAt(ticket.getCancelledAt())
+                            .createdAt(ticket.getCreatedAt())
+                            .build();
+                })
+                .collect(Collectors.toList());
+    }
 }
-
-
