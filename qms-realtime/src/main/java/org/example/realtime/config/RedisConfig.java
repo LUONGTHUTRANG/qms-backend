@@ -22,6 +22,9 @@ public class RedisConfig {
         // Cú pháp pattern để lắng nghe TẤT CẢ các kênh (channel) dạng qms:events:branch:*
         container.addMessageListener(listenerAdapter, new PatternTopic("qms:events:branch:*"));
         
+        // Cú pháp pattern để lắng nghe TẤT CẢ các kênh counter session dạng qms:events:counter:session:*
+        container.addMessageListener(listenerAdapter, new PatternTopic("qms:events:counter:session:*"));
+
         return container;
     }
 

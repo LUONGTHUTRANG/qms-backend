@@ -49,6 +49,10 @@ public class ServiceCounterController {
     public ApiResponse<ServiceCounterDto> update(@PathVariable("id") Long id, @Valid @RequestBody ServiceCounterDto dto) {
         return ApiResponse.success(service.update(id, dto), "Updated service counter successfully");
     }
+
+    @GetMapping("/{counterId}/topics")
+    public ApiResponse<List<String>> getCounterSubscriptionTopics(
+            @PathVariable("counterId") Long counterId) {
+        return ApiResponse.success(service.getSubscriptionTopicsByCounterId(counterId), "Subscription topics retrieved successfully");
+    }
 }
-
-

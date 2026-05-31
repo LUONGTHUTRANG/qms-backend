@@ -53,6 +53,9 @@ public class TicketController {
             @PathVariable("id") Long id,
             @RequestBody org.example.ticket.dto.TicketStatusUpdateRequest request) {
         Long userId = UserContextHolder.getUserId();
+        if (request.getStatus() == TicketStatus.CALLED) {
+            return ApiResponse.success(service.updateStatusWithCounter(id, request.getStatus(), userId, null, request.getReasonId(), request.getReason()), "Ticket status updated");
+        }
         return ApiResponse.success(service.updateStatus(id, request.getStatus(), userId, request.getReasonId(), request.getReason()), "Ticket status updated");
     }
 
@@ -123,5 +126,13 @@ public class TicketController {
     public ApiResponse<List<TicketDto>> getTicketsByStatusAndCounter(
             @Valid @RequestBody TicketListRequest request) {
         return ApiResponse.success(service.getTicketsByStatusAndCounter(request.getStatus(), request.getCounterId()));
+    }
+
+    @GetMapping("/cancelled-tickets")
+    public ApiResponse<List<TicketDto>> getCancelledTickets(
+            @RequestParam("branchId") Long branchId,
+            @RequestParam(value = "date", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
+        LocalDate queryDate = date != null ? date : LocalDate.now();
+        return ApiResponse.success(service.getCancelledTickets(branchId, queryDate), "Cancelled tickets retrieved successfully");
     }
 }

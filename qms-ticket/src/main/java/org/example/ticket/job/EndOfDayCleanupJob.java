@@ -44,7 +44,7 @@ public class EndOfDayCleanupJob {
         
         // Clear Redis
         queueService.clearAllQueues();
-        
+
         log.info("End of Day Cleanup Executed: {} forgotten tickets cancelled. Redis wiped.", rowCount);
     }
 }

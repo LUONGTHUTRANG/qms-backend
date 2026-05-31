@@ -8,15 +8,18 @@ import org.example.auth.dto.CounterSessionDto;
 import org.example.auth.entity.AppUser;
 import org.example.auth.entity.CounterSession;
 import org.example.auth.entity.enums.CounterSessionStatus;
+import org.example.auth.event.CounterSessionStartedEvent;
 import org.example.auth.repository.AppUserRepository;
 import org.example.auth.repository.CounterSessionRepository;
 import org.example.common.exception.BusinessException;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -24,6 +27,7 @@ public class CounterSessionService {
 
     private final CounterSessionRepository sessionRepository;
     private final AppUserRepository userRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     private CounterSessionDto mapToDto(CounterSession entity) {
         return CounterSessionDto.builder()
@@ -60,7 +64,7 @@ public class CounterSessionService {
         // Business Rule: One counter can only be occupied by one user at a time. (Usually applied, checking it here)
         List<CounterSession> activeSessions = sessionRepository.findByCounterIdAndStatus(request.getCounterId(), CounterSessionStatus.ACTIVE);
         if (!activeSessions.isEmpty()) {
-             throw new BusinessException(HttpStatus.CONFLICT, "Counter is already occupied by another user");
+             throw new BusinessException(HttpStatus.CONFLICT, "Quầy đã được phục vụ bởi nhân viên khác. Vui lòng chọn đúng quầy.");
         }
 
         CounterSession newSession = CounterSession.builder()
@@ -71,7 +75,12 @@ public class CounterSessionService {
                 .startedAt(LocalDateTime.now())
                 .build();
 
-        return mapToDto(sessionRepository.save(newSession));
+        CounterSession savedSession = sessionRepository.save(newSession);
+
+        // Phát đi sự kiện session started cho quầy đó
+        eventPublisher.publishEvent(new CounterSessionStartedEvent(this, savedSession, user.getFullName()));
+
+        return mapToDto(savedSession);
     }
 
     @Transactional(readOnly = true)
@@ -81,20 +90,82 @@ public class CounterSessionService {
          return mapToDto(session);
     }
 
-    @Transactional
-    public CounterSessionDto endSession() {
-        UserContext ctx = UserContextHolder.getContext();
-        if (ctx == null) {
-            throw new BusinessException(HttpStatus.UNAUTHORIZED, "User authentication context is missing or invalid");
-        }
-        Long currentUserId = ctx.getUserId();
+     @Transactional
+     public CounterSessionDto endSession() {
+         UserContext ctx = UserContextHolder.getContext();
+         if (ctx == null) {
+             throw new BusinessException(HttpStatus.UNAUTHORIZED, "User authentication context is missing or invalid");
+         }
+         Long currentUserId = ctx.getUserId();
 
-        CounterSession session = sessionRepository.findByUserIdAndStatus(currentUserId, CounterSessionStatus.ACTIVE)
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "User has no active counter session"));
+         CounterSession session = sessionRepository.findByUserIdAndStatus(currentUserId, CounterSessionStatus.ACTIVE)
+                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "User has no active counter session"));
 
-        session.setStatus(CounterSessionStatus.CLOSED);
-        session.setEndedAt(LocalDateTime.now());
+         session.setStatus(CounterSessionStatus.CLOSED);
+         session.setEndedAt(LocalDateTime.now());
 
-        return mapToDto(sessionRepository.save(session));
-    }
+         return mapToDto(sessionRepository.save(session));
+     }
+
+     /**
+      * End all active sessions (used for day-end or app cleanup)
+      * This method is called automatically and doesn't require UserContext
+      * @return List of ended sessions
+      */
+     @Transactional
+     public List<CounterSessionDto> endAllActiveSessions() {
+         List<CounterSession> activeSessions = sessionRepository.findAllByStatus(CounterSessionStatus.ACTIVE);
+         
+         if (activeSessions.isEmpty()) {
+             return List.of();
+         }
+
+         LocalDateTime now = LocalDateTime.now();
+         for (CounterSession session : activeSessions) {
+             session.setStatus(CounterSessionStatus.CLOSED);
+             session.setEndedAt(now);
+         }
+
+         List<CounterSession> endedSessions = sessionRepository.saveAll(activeSessions);
+         return endedSessions.stream()
+                 .map(this::mapToDto)
+                 .collect(Collectors.toList());
+     }
+
+     /**
+      * Get count of active sessions (for monitoring)
+      */
+     @Transactional(readOnly = true)
+     public long getActiveSessionCount() {
+         return sessionRepository.findAllByStatus(CounterSessionStatus.ACTIVE).size();
+     }
+
+      /**
+       * Lấy danh sách counter IDs đang có phiên làm việc ACTIVE
+       * Dùng cho qms-management để xác định trạng thái thực tế của quầy
+       * @return List các counter ID có phiên ACTIVE
+       */
+      @Transactional(readOnly = true)
+      public List<Long> getActiveCounterIds() {
+          return sessionRepository.findAllByStatus(CounterSessionStatus.ACTIVE)
+                  .stream()
+                  .map(CounterSession::getCounterId)
+                  .collect(Collectors.toList());
+      }
+
+      /**
+       * Lấy thông tin về người đang phục vụ counter có ID được chỉ định
+       * Kiểm tra xem có session ACTIVE cho counter đó hay không
+       * @param counterId ID của quầy
+       * @return Thông tin session và người phục vụ nếu counter đang được phục vụ
+       * @throws BusinessException nếu không có session ACTIVE cho counter đó
+       */
+      @Transactional(readOnly = true)
+      public CounterSessionDto getActiveSessionByCounterId(Long counterId) {
+          CounterSession session = sessionRepository.findByCounterIdAndStatus(counterId, CounterSessionStatus.ACTIVE)
+                  .stream()
+                  .findFirst()
+                  .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "Quầy không có phiên làm việc ACTIVE"));
+          return mapToDto(session);
+      }
 }

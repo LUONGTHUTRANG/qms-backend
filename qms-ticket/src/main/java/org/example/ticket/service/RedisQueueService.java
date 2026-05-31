@@ -1,14 +1,15 @@
 package org.example.ticket.service;
 
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
-import java.util.LinkedHashSet;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 @Service
 @RequiredArgsConstructor
@@ -16,18 +17,25 @@ public class RedisQueueService {
     private final RedisTemplate<String, Object> redisTemplate;
     private static final String QUEUE_PREFIX = "qms:queue:";
     private static final String SUSPEND_QUEUE_PREFIX = "qms:suspend_queue:";
+    private static final long TTL_HOURS = 48;
+    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd");
+
+    private String getDateSuffix() {
+        return DATE_FORMATTER.format(LocalDate.now());
+    }
 
     public String buildQueueKey(Long branchId, Long requestGroupId, Long segmentId) {
-        return QUEUE_PREFIX + branchId + ":" + requestGroupId + ":" + (segmentId != null ? segmentId : "0");
+        return QUEUE_PREFIX + getDateSuffix() + ":" + branchId + ":" + requestGroupId + ":" + (segmentId != null ? segmentId : "0");
     }
 
     public String buildSuspendQueueKey(Long branchId, Long requestGroupId, Long segmentId) {
-        return SUSPEND_QUEUE_PREFIX + branchId + ":" + requestGroupId + ":" + (segmentId != null ? segmentId : "0");
+        return SUSPEND_QUEUE_PREFIX + getDateSuffix() + ":" + branchId + ":" + requestGroupId + ":" + (segmentId != null ? segmentId : "0");
     }
 
     public void addTicketToQueue(Long branchId, Long requestGroupId, Long segmentId, Long ticketId, double score) {
         String key = buildQueueKey(branchId, requestGroupId, segmentId);
         redisTemplate.opsForZSet().add(key, ticketId.toString(), score);
+        redisTemplate.expire(key, TTL_HOURS, TimeUnit.HOURS);
     }
 
     public void removeTicketFromQueue(Long branchId, Long requestGroupId, Long segmentId, Long ticketId) {
@@ -52,6 +60,7 @@ public class RedisQueueService {
     public void addTicketToSuspendQueue(Long branchId, Long requestGroupId, Long segmentId, Long ticketId, double score) {
         String key = buildSuspendQueueKey(branchId, requestGroupId, segmentId);
         redisTemplate.opsForHash().put(key, ticketId.toString(), String.valueOf(score));
+        redisTemplate.expire(key, TTL_HOURS, TimeUnit.HOURS);
     }
 
     public void removeTicketFromSuspendQueue(Long branchId, Long requestGroupId, Long segmentId, Long ticketId) {

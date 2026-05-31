@@ -218,102 +218,106 @@ public class TicketService {
 
     @Transactional
     public TicketDto updateStatusWithCounter(Long ticketId, TicketStatus newStatus, Long userId, Long knownCounterId, Long reasonId, String note) {
-        Ticket ticket = ticketRepository.findById(ticketId)
-                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "Ticket not found"));
+         Ticket ticket = ticketRepository.findById(ticketId)
+                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "Ticket not found"));
 
-        TicketStatus oldStatus = ticket.getStatus();
-        if (oldStatus == newStatus) {
-            throw new BusinessException(HttpStatus.BAD_REQUEST, "Ticket is already in status " + newStatus);
-        }
+         TicketStatus oldStatus = ticket.getStatus();
+         // Allow re-calling a CALLED ticket (for use case: recall the same ticket by the same user)
+         boolean isRecallingTicket = (oldStatus == TicketStatus.CALLED && newStatus == TicketStatus.CALLED);
+         
+         if (oldStatus == newStatus && !isRecallingTicket) {
+             throw new BusinessException(HttpStatus.BAD_REQUEST, "Ticket is already in status " + newStatus);
+         }
 
-        ticket.setStatus(newStatus);
+         ticket.setStatus(newStatus);
 
-        TicketEventType eventType = TicketEventType.TRANSFERRED; // Default generic
-        if (newStatus == TicketStatus.CALLED) {
-            eventType = TicketEventType.CALLED;
-            ticket.setCallAttemptCount(ticket.getCallAttemptCount() + 1);
-            ticket.setLastCalledAt(LocalDateTime.now());
+         TicketEventType eventType = TicketEventType.TRANSFERRED; // Default generic
+         if (newStatus == TicketStatus.CALLED) {
+             eventType = TicketEventType.CALLED;
+             ticket.setCallAttemptCount(ticket.getCallAttemptCount() + 1);
+             ticket.setLastCalledAt(LocalDateTime.now());
 
-            if (knownCounterId != null) {
-                ticket.setCurrentCounterId(knownCounterId);
-            } else if (userId != null) {
-                try {
-                    CounterSessionDto session = authClient.getActiveSession(userId).getData();
-                    if (session != null && session.getCounterId() != null) {
-                        ticket.setCurrentCounterId(session.getCounterId());
-                    }
-                } catch (Exception ignored) {
-                }
-            }
-        }
-        else if (newStatus == TicketStatus.SERVING) {
-            eventType = TicketEventType.SERVING_STARTED;
-            ticket.setServingAt(LocalDateTime.now());
-        }
-        else if (newStatus == TicketStatus.DONE) {
-            eventType = TicketEventType.DONE;
-            ticket.setDoneAt(LocalDateTime.now());
-        }
-        else if (newStatus == TicketStatus.CANCELLED) {
-            eventType = TicketEventType.CANCELLED;
-            ticket.setCancelledAt(LocalDateTime.now());
-        }
-
-        ticket = ticketRepository.save(ticket);
-
-        TicketEvent event = TicketEvent.builder()
-                .ticket(ticket)
-                .eventType(eventType)
-                .fromStatus(oldStatus)
-                .toStatus(newStatus)
-                .performedByUserId(userId)
-                .reasonId(reasonId)
-                .note(note)
-                .build();
-        ticketEventRepository.save(event);
-
-        boolean removedFromQueue = false;
-
-        if (newStatus == TicketStatus.SKIPPED_HOLD) {
-            if (ticket.getRejoinCount() >= 1) {
-                throw new BusinessException(HttpStatus.BAD_REQUEST, "Vé không thể được tạm hoãn do đã vượt quá số lần tạm hoãn quy định.");
-            }
-             // Policy 3: Skip (Lỡ lượt không thấy -> Xóa Queue và Giữ chỗ 15p)
-             ticket.setSkipExpireAt(LocalDateTime.now().plusMinutes(15));
-
-             Double currentScore = redisQueueService.getTicketScore(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
-             
-             if (currentScore != null) {
-                  // Vé vẫn nằm trong queue - lưu điểm và xóa khỏi queue
-                  ticket.setWaitCreditSeconds(currentScore.intValue());
-                  redisQueueService.removeTicketFromQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
-             } else {
-                  // Vé đã không nằm trong queue (ví dụ: từ CALLED hoặc SERVING) - tính toán score mới
-                  // Sử dụng waitCreditSeconds nếu đã tồn tại, hoặc tính từ thời gian chờ đợi
-                  if (ticket.getWaitCreditSeconds() != null && ticket.getWaitCreditSeconds() != 0) {
-                       currentScore = (double) Math.abs(ticket.getWaitCreditSeconds());
-                  } else {
-                       // Nếu không có waitCreditSeconds, tính dựa trên thời gian chờ (từ lúc tạo đến giờ)
-                       long waitTimeInSeconds = java.time.temporal.ChronoUnit.SECONDS.between(ticket.getCreatedAt(), LocalDateTime.now());
-                       currentScore = -(double) waitTimeInSeconds; // Lưu ở dạng âm giống queue
-                  }
+             if (knownCounterId != null) {
+                 ticket.setCurrentCounterId(knownCounterId);
+             } else if (userId != null) {
+                 try {
+                     CounterSessionDto session = authClient.getActiveSession(userId).getData();
+                     if (session != null && session.getCounterId() != null) {
+                         ticket.setCurrentCounterId(session.getCounterId());
+                     }
+                 } catch (Exception ignored) {
+                 }
              }
-             
-             // Luôn thêm vé vào suspend queue (dù vé có từ queue hay không)
-             if (currentScore != null) {
-                  redisQueueService.addTicketToSuspendQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId(), currentScore);
-                  removedFromQueue = true;
-             }
-        } else if (newStatus == TicketStatus.CANCELLED || newStatus == TicketStatus.DONE || newStatus == TicketStatus.SERVING) {
-             redisQueueService.removeTicketFromQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
-             removedFromQueue = true;
-        } else if (newStatus == TicketStatus.CALLED) {
-             // Khi được gọi, loại bỏ khỏi queue (vé đã được gọi)
-             redisQueueService.removeTicketFromQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
-             removedFromQueue = true;
-        }
+         }
+         else if (newStatus == TicketStatus.SERVING) {
+             eventType = TicketEventType.SERVING_STARTED;
+             ticket.setServingAt(LocalDateTime.now());
+         }
+         else if (newStatus == TicketStatus.DONE) {
+             eventType = TicketEventType.DONE;
+             ticket.setDoneAt(LocalDateTime.now());
+         }
+         else if (newStatus == TicketStatus.CANCELLED) {
+             eventType = TicketEventType.CANCELLED;
+             ticket.setCancelledAt(LocalDateTime.now());
+         }
 
-        eventPublisher.publishEvent(buildTicketStatusChangedEvent(ticket, oldStatus));
+         ticket = ticketRepository.save(ticket);
+
+         TicketEvent event = TicketEvent.builder()
+                 .ticket(ticket)
+                 .eventType(eventType)
+                 .fromStatus(oldStatus)
+                 .toStatus(newStatus)
+                 .performedByUserId(userId)
+                 .reasonId(reasonId)
+                 .note(note)
+                 .build();
+         ticketEventRepository.save(event);
+
+         boolean removedFromQueue = false;
+
+         if (newStatus == TicketStatus.SKIPPED_HOLD) {
+             if (ticket.getRejoinCount() >= 1) {
+                 throw new BusinessException(HttpStatus.BAD_REQUEST, "Vé không thể được tạm hoãn do đã vượt quá số lần tạm hoãn quy định.");
+             }
+              // Policy 3: Skip (Lỡ lượt không thấy -> Xóa Queue và Giữ chỗ 15p)
+              ticket.setSkipExpireAt(LocalDateTime.now().plusMinutes(15));
+
+              Double currentScore = redisQueueService.getTicketScore(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
+              
+              if (currentScore != null) {
+                   // Vé vẫn nằm trong queue - lưu điểm và xóa khỏi queue
+                   ticket.setWaitCreditSeconds(currentScore.intValue());
+                   redisQueueService.removeTicketFromQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
+              } else {
+                   // Vé đã không nằm trong queue (ví dụ: từ CALLED hoặc SERVING) - tính toán score mới
+                   // Sử dụng waitCreditSeconds nếu đã tồn tại, hoặc tính từ thời gian chờ đợi
+                   if (ticket.getWaitCreditSeconds() != null && ticket.getWaitCreditSeconds() != 0) {
+                        currentScore = (double) Math.abs(ticket.getWaitCreditSeconds());
+                   } else {
+                        // Nếu không có waitCreditSeconds, tính dựa trên thời gian chờ (từ lúc tạo đến giờ)
+                        long waitTimeInSeconds = java.time.temporal.ChronoUnit.SECONDS.between(ticket.getCreatedAt(), LocalDateTime.now());
+                        currentScore = -(double) waitTimeInSeconds; // Lưu ở dạng âm giống queue
+                   }
+              }
+              
+              // Luôn thêm vé vào suspend queue (dù vé có từ queue hay không)
+              if (currentScore != null) {
+                   redisQueueService.addTicketToSuspendQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId(), currentScore);
+                   removedFromQueue = true;
+              }
+         } else if (newStatus == TicketStatus.CANCELLED || newStatus == TicketStatus.DONE || newStatus == TicketStatus.SERVING) {
+              redisQueueService.removeTicketFromQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
+              removedFromQueue = true;
+         } else if (newStatus == TicketStatus.CALLED && !isRecallingTicket) {
+              // Khi được gọi lần đầu, loại bỏ khỏi queue (vé đã được gọi)
+              redisQueueService.removeTicketFromQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
+              removedFromQueue = true;
+         }
+         // Note: Nếu là recalling (CALLED -> CALLED), không cần remove khỏi queue vì đã bị remove ở lần gọi đầu
+
+         eventPublisher.publishEvent(buildTicketStatusChangedEvent(ticket, oldStatus));
 
         // if (removedFromQueue) {
         //     eventPublisher.publishEvent(new TicketRemovedFromQueueEvent(this, ticket, newStatus));
@@ -483,6 +487,7 @@ public class TicketService {
         for (QueueItemDto item : masterQueue) {
              ticketRepository.findById(item.getTicketId()).ifPresent(t -> {
                  item.setTicketNo(t.getTicketNo());
+                 item.setCreatedAt(t.getCreatedAt());
 
                  Long segId = t.getCustomerSegmentId();
                  if (segId != null) {
@@ -508,7 +513,7 @@ public class TicketService {
     public QueueItemDto getTopTicketForCounter(Long userId) {
         List<QueueItemDto> queue = getNextTicketsForCounter(userId);
         if (queue.isEmpty()) {
-            throw new BusinessException(HttpStatus.NOT_FOUND, "No waiting tickets currently in queue for this counter");
+            throw new BusinessException(HttpStatus.NOT_FOUND, "Quầy hiện không có phiếu chờ cần phục vụ.");
         }
         return queue.get(0);
     }
@@ -832,6 +837,68 @@ public class TicketService {
                     }
 
                     // Build DTO with cached counter code
+                    return TicketDto.builder()
+                            .id(ticket.getId())
+                            .branchId(ticket.getBranchId())
+                            .businessDate(ticket.getBusinessDate())
+                            .ticketNo(ticket.getTicketNo())
+                            .requestGroupId(ticket.getRequestGroupId())
+                            .serviceTypeId(ticket.getServiceTypeId())
+                            .customerSegmentId(ticket.getCustomerSegmentId())
+                            .phoneNumber(ticket.getPhoneNumber())
+                            .status(ticket.getStatus())
+                            .rejoinCount(ticket.getRejoinCount())
+                            .skipExpireAt(ticket.getSkipExpireAt())
+                            .waitCreditSeconds(ticket.getWaitCreditSeconds())
+                            .callAttemptCount(ticket.getCallAttemptCount())
+                            .currentCounterId(ticket.getCurrentCounterId())
+                            .currentCounterCode(counterCode)
+                            .lastCalledAt(ticket.getLastCalledAt())
+                            .servingAt(ticket.getServingAt())
+                            .doneAt(ticket.getDoneAt())
+                            .cancelledAt(ticket.getCancelledAt())
+                            .createdAt(ticket.getCreatedAt())
+                            .build();
+                })
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Lấy danh sách vé đã bị hủy (CANCELLED status)
+     * Filter theo branch và date
+     * Order theo cancelledAt (mới nhất ở đầu)
+     */
+    public List<TicketDto> getCancelledTickets(Long branchId, LocalDate date) {
+        List<Ticket> tickets = ticketRepository.findByBranchIdAndBusinessDateAndStatus(branchId, date, TicketStatus.CANCELLED);
+        
+        // Sort theo cancelledAt descending (mới nhất ở đầu)
+        tickets.sort((t1, t2) -> {
+            if (t1.getCancelledAt() == null || t2.getCancelledAt() == null) {
+                return 0;
+            }
+            return t2.getCancelledAt().compareTo(t1.getCancelledAt());
+        });
+
+        java.util.Map<Long, String> counterCodeCache = new java.util.HashMap<>();
+
+        return tickets.stream()
+                .map(ticket -> {
+                    String counterCode = null;
+                    if (ticket.getCurrentCounterId() != null) {
+                        // Check cache trước
+                        if (counterCodeCache.containsKey(ticket.getCurrentCounterId())) {
+                            counterCode = counterCodeCache.get(ticket.getCurrentCounterId());
+                        } else {
+                            // Gọi API lấy code
+                            try {
+                                counterCode = managementClient.getServiceCounter(ticket.getCurrentCounterId()).getData().getCode();
+                                counterCodeCache.put(ticket.getCurrentCounterId(), counterCode);
+                            } catch (Exception ignored) {
+                                counterCodeCache.put(ticket.getCurrentCounterId(), null);
+                            }
+                        }
+                    }
+
                     return TicketDto.builder()
                             .id(ticket.getId())
                             .branchId(ticket.getBranchId())

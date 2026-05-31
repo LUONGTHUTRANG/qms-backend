@@ -15,7 +15,26 @@ spring:
     properties:
       hibernate:
       format_sql: true
+  redis:
+    host: localhost
+    port: 6379
+    database: 0
+    timeout: 2000ms
+    jedis:
+      pool:
+        max-active: 8
+        max-idle: 8
+        min-idle: 0
+        max-wait: -1ms
 
 jwt:
   secret: YmFua1Ftc0JlU2VjcmV0S2V5TXVzdEJlQXRMZWFzdDMyQnl0ZXM=
   expiration: 3600000
+
+app:
+  session:
+    cleanup:
+      enabled: true
+      schedule: "0 0 0 * * ?"  # Chạy hằng ngày lúc 00:00 (midnight)
+      initial-delay: 60000     # Delay 60 giây trước khi chạy lần đầu
+

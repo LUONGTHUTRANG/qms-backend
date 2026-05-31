@@ -321,6 +321,7 @@ ALTER TABLE ticket_event
 -- Tạo index để tối ưu truy vấn báo cáo sau này
 CREATE INDEX idx_event_reason ON ticket_event(reason_id);
 
+USE bank_qms_management;
 INSERT INTO reason (code, name, type) VALUES
 -- Lý do chuyển quầy
 ('T_WRONG_SERVICE', 'Chọn sai luồng nghiệp vụ', 'TRANSFER'),

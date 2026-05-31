@@ -59,6 +59,7 @@ public class WebSocketNotifierListener {
             }
             payload.put("status", ticket.getStatus().name());
             payload.put("score", event.getScore());
+            payload.put("createdAt", ticket.getCreatedAt());
 
             String json = objectMapper.writeValueAsString(payload);
             redisTemplate.convertAndSend(channel, json);

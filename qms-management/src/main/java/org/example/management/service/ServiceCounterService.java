@@ -3,6 +3,7 @@ package org.example.management.service;
 import lombok.RequiredArgsConstructor;
 import org.example.common.exception.BusinessException;
 import org.example.common.dto.ApiResponse;
+import org.example.management.client.AuthServiceClient;
 import org.example.management.dto.ServiceCounterDto;
 import org.example.management.dto.ServiceCounterWithTicketDto;
 import org.example.management.entity.Branch;
@@ -37,6 +38,9 @@ public class ServiceCounterService {
 
     @Autowired(required = false)
     private TicketServiceClient ticketServiceClient;
+
+    @Autowired(required = false)
+    private AuthServiceClient authServiceClient;
 
     private ServiceCounterDto mapToDto(ServiceCounter entity) {
         return ServiceCounterDto.builder()
@@ -127,6 +131,7 @@ public class ServiceCounterService {
 
     /**
      * Lấy danh sách quầy theo branchId kèm theo vé đang được phục vụ (nếu có)
+     * Đồng thời lấy trạng thái thực tế của quầy từ phiên làm việc ACTIVE trong ngày hiện tại
      * Tối ưu bằng cách gửi danh sách quầy một lần để lấy danh sách vé thay vì gọi lần lượt cho từng quầy
      */
     public List<ServiceCounterWithTicketDto> getCountersByBranchWithTickets(Long branchId) {
@@ -142,6 +147,19 @@ public class ServiceCounterService {
                 .map(ServiceCounter::getId)
                 .collect(Collectors.toList());
 
+        // B2.5: Lấy danh sách counter IDs đang có phiên làm việc ACTIVE (để xác định trạng thái thực tế)
+        Set<Long> activeCounterIds = new HashSet<>();
+        if (authServiceClient != null) {
+            try {
+                ApiResponse<List<Long>> response = authServiceClient.getActiveCounterIds();
+                if (response != null && response.getData() != null && !response.getData().isEmpty()) {
+                    activeCounterIds = new HashSet<>(response.getData());
+                }
+            } catch (Exception ignored) {
+                // Nếu không lấy được thông tin phiên, tiếp tục với trạng thái từ DB
+            }
+        }
+
         // B3: Lấy danh sách vé hiện tại cho tất cả quầy (tối ưu hóa - 1 lần gọi thay vì n lần)
         Map<Long, Map<String, Object>> counterTicketsMap = new java.util.HashMap<>();
         if (ticketServiceClient != null) {
@@ -155,8 +173,9 @@ public class ServiceCounterService {
             }
         }
 
-        // B4: Build response
+        // B4: Build response với trạng thái thực tế
         Map<Long, Map<String, Object>> finalCounterTicketsMap = counterTicketsMap;
+        Set<Long> finalActiveCounterIds = activeCounterIds;
         return counters.stream()
                 .map(counter -> {
                     ServiceCounterWithTicketDto dto = new ServiceCounterWithTicketDto();
@@ -164,7 +183,6 @@ public class ServiceCounterService {
                     dto.setBranchId(counter.getBranch().getId());
                     dto.setCode(counter.getCode());
                     dto.setName(counter.getName());
-                    dto.setStatus(counter.getStatus());
                     dto.setIsActive(counter.getIsActive());
                     dto.setRequestGroupIds(counter.getRequestGroups() != null ?
                             counter.getRequestGroups().stream().map(RequestGroup::getId).collect(Collectors.toSet()) :
@@ -172,6 +190,21 @@ public class ServiceCounterService {
                     dto.setCustomerSegmentIds(counter.getCustomerSegments() != null ?
                             counter.getCustomerSegments().stream().map(CustomerSegment::getId).collect(Collectors.toSet()) :
                             new HashSet<>());
+
+                    // *** Xác định trạng thái thực tế của quầy ***
+                    // Nếu isActive = false → status = INACTIVE (quầy đã disable)
+                    // Nếu isActive = true + có phiên ACTIVE → status = OCCUPIED (đang phục vụ)
+                    // Nếu isActive = true + không có phiên → status = AVAILABLE (chưa hoạt động)
+                    if (!counter.getIsActive()) {
+                        // Quầy đã disable
+                        dto.setStatus(CounterStatus.INACTIVE);
+                    } else if (finalActiveCounterIds.contains(counter.getId())) {
+                        // Quầy đang có phiên làm việc ACTIVE
+                        dto.setStatus(CounterStatus.AVAILABLE);
+                    } else {
+                        // Quầy enable nhưng chưa có ai phục vụ
+                        dto.setStatus(CounterStatus.OFFLINE);
+                    }
 
                     // Gán vé hiện tại (nếu có)
                     if (finalCounterTicketsMap.containsKey(counter.getId())) {
@@ -187,6 +220,36 @@ public class ServiceCounterService {
                 })
                 .collect(Collectors.toList());
     }
+
+    /**
+     * Lấy danh sách subscription topics cho một quầy cụ thể
+     * Topics được xây dựng dựa trên RequestGroupIds và CustomerSegmentIds của quầy
+     * Format: /topic/branch/{branchId}/{requestGroupId}/{customerSegmentId}
+     * 
+     * @param counterId ID của quầy
+     * @return List các subscription topics
+     */
+    public List<String> getSubscriptionTopicsByCounterId(Long counterId) {
+        // B1: Lấy thông tin quầy
+        ServiceCounter counter = repository.findById(counterId)
+                .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "Service counter not found"));
+
+        // B2: Kiểm tra dữ liệu hợp lệ
+        if (counter.getRequestGroups() == null || counter.getRequestGroups().isEmpty() ||
+            counter.getCustomerSegments() == null || counter.getCustomerSegments().isEmpty()) {
+            return java.util.Collections.emptyList();
+        }
+
+        // B3: Xây dựng danh sách topics
+        Long branchId = counter.getBranch().getId();
+        List<String> topics = new java.util.ArrayList<>();
+
+        for (RequestGroup rg : counter.getRequestGroups()) {
+            for (CustomerSegment segment : counter.getCustomerSegments()) {
+                topics.add("/topic/branch/" + branchId + "/" + rg.getId() + "/" + segment.getId());
+            }
+        }
+
+        return topics;
+    }
 }
-
-

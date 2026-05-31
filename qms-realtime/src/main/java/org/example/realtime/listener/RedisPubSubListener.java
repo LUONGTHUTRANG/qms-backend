@@ -28,6 +28,21 @@ public class RedisPubSubListener implements MessageListener {
             String channel = new String(message.getChannel(), StandardCharsets.UTF_8);
             String payload = new String(message.getBody(), StandardCharsets.UTF_8);
 
+            // Xử lý branch events: qms:events:branch:{branchId}:{groupId}:{segmentId}
+            if (channel.startsWith("qms:events:branch:")) {
+                handleBranchEvent(channel, payload);
+            }
+            // Xử lý counter session events: qms:events:counter:session:{branchId}:{counterId}
+            else if (channel.startsWith("qms:events:counter:session:")) {
+                handleCounterSessionEvent(channel, payload);
+            }
+        } catch (Exception ex) {
+            log.error("Failed to forward Redis pub/sub message to websocket: {}", ex.getMessage(), ex);
+        }
+    }
+
+    private void handleBranchEvent(String channel, String payload) {
+        try {
             // Cấu trúc channel: qms:events:branch:{branchId}:{groupId}:{segmentId}
             String[] parts = channel.split(":");
             String branchId = parts[3];
@@ -42,7 +57,26 @@ public class RedisPubSubListener implements MessageListener {
 
             log.info("FORWARDED REDIS => WEBSOCKET | Channel: {} | Target: {} | Payload: {}", channel, webSocketTopic, payload);
         } catch (Exception ex) {
-            log.error("Failed to forward Redis pub/sub message to websocket: {}", ex.getMessage(), ex);
+            log.error("Failed to forward branch event: {}", ex.getMessage(), ex);
+        }
+    }
+
+    private void handleCounterSessionEvent(String channel, String payload) {
+        try {
+            // Cấu trúc channel: qms:events:counter:session:{branchId}:{counterId}
+            String[] parts = channel.split(":");
+            String branchId = parts[4];
+            String counterId = parts[5];
+
+            // Địa chỉ Đích mà Client Angular/ReactJS đang Subscribe trên Socket
+            String webSocketTopic = "/topic/counter-session/" + branchId + "/" + counterId;
+
+            // Bắn ngay data (payload) xuống WebSocket
+            messagingTemplate.convertAndSend(webSocketTopic, payload);
+
+            log.info("FORWARDED REDIS => WEBSOCKET | Channel: {} | Target: {} | Payload: {}", channel, webSocketTopic, payload);
+        } catch (Exception ex) {
+            log.error("Failed to forward counter session event: {}", ex.getMessage(), ex);
         }
     }
 }

@@ -12,5 +12,6 @@ import java.util.Optional;
 public interface CounterSessionRepository extends JpaRepository<CounterSession, Long> {
     Optional<CounterSession> findByUserIdAndStatus(Long userId, CounterSessionStatus status);
     List<CounterSession> findByCounterIdAndStatus(Long counterId, CounterSessionStatus status);
+    List<CounterSession> findAllByStatus(CounterSessionStatus status);
 }
 
