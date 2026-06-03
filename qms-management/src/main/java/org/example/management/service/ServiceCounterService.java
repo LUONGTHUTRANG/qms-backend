@@ -252,4 +252,49 @@ public class ServiceCounterService {
 
         return topics;
     }
+
+    /**
+     * Lấy danh sách subscription topics cho tất cả các quầy có status AVAILABLE
+     * Topics được xây dựng dựa trên RequestGroupIds và CustomerSegmentIds của quầy
+     * Format: /topic/branch/{branchId}/{requestGroupId}/{customerSegmentId}
+     *
+     * @return Map với key là counterId, value là List các subscription topics
+     */
+    public Map<Long, List<String>> getSubscriptionTopicsForAvailableCounters() {
+        // B1: Lấy tất cả quầy có status = AVAILABLE
+        List<ServiceCounter> availableCounters = repository.findAll().stream()
+                .filter(counter -> counter.getStatus() == CounterStatus.AVAILABLE && counter.getIsActive())
+                .collect(Collectors.toList());
+
+        if (availableCounters.isEmpty()) {
+            return java.util.Collections.emptyMap();
+        }
+
+        // B2: Xây dựng map topics cho mỗi quầy
+        Map<Long, List<String>> result = new java.util.HashMap<>();
+
+        for (ServiceCounter counter : availableCounters) {
+            // Kiểm tra dữ liệu hợp lệ
+            if (counter.getRequestGroups() == null || counter.getRequestGroups().isEmpty() ||
+                counter.getCustomerSegments() == null || counter.getCustomerSegments().isEmpty()) {
+                result.put(counter.getId(), java.util.Collections.emptyList());
+                continue;
+            }
+
+            // Xây dựng danh sách topics
+            Long branchId = counter.getBranch().getId();
+            List<String> topics = new java.util.ArrayList<>();
+
+            for (RequestGroup rg : counter.getRequestGroups()) {
+                for (CustomerSegment segment : counter.getCustomerSegments()) {
+                    topics.add("/topic/branch/" + branchId + "/" + rg.getId() + "/" + segment.getId());
+                }
+            }
+
+            result.put(counter.getId(), topics);
+        }
+
+        return result;
+    }
+
 }

@@ -1,5 +1,6 @@
 package org.example.management.controller;
 
+import jakarta.annotation.security.PermitAll;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.example.common.dto.ApiResponse;
@@ -10,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/management/service-counters")
@@ -54,5 +56,11 @@ public class ServiceCounterController {
     public ApiResponse<List<String>> getCounterSubscriptionTopics(
             @PathVariable("counterId") Long counterId) {
         return ApiResponse.success(service.getSubscriptionTopicsByCounterId(counterId), "Subscription topics retrieved successfully");
+    }
+
+    @PermitAll
+    @GetMapping("/topics/available")
+    public ApiResponse<Map<Long, List<String>>> getAvailableCountersSubscriptionTopics() {
+        return ApiResponse.success(service.getSubscriptionTopicsForAvailableCounters(), "Subscription topics for available counters retrieved successfully");
     }
 }

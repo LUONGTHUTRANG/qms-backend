@@ -1,5 +1,6 @@
 package org.example.ticket.controller;
 
+import jakarta.annotation.security.PermitAll;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.example.common.dto.ApiResponse;
@@ -122,6 +123,7 @@ public class TicketController {
         return ApiResponse.success(service.getTicketsForCountersAsMap(counterIds));
     }
 
+    @PermitAll
     @PostMapping("/list-by-status")
     public ApiResponse<List<TicketDto>> getTicketsByStatusAndCounter(
             @Valid @RequestBody TicketListRequest request) {
