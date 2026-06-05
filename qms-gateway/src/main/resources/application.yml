@@ -19,6 +19,12 @@ spring:
           uri: http://localhost:8083
           predicates:
             - Path=/api/v1/ticket/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 1
+                redis-rate-limiter.burstCapacity: 1
+                key-resolver: "#{@ipKeyResolver}"
         - id: qms-realtime
           uri: http://localhost:8084
           predicates:

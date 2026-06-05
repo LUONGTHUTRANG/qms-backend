@@ -38,9 +38,10 @@ public class RedisQueueService {
         redisTemplate.expire(key, TTL_HOURS, TimeUnit.HOURS);
     }
 
-    public void removeTicketFromQueue(Long branchId, Long requestGroupId, Long segmentId, Long ticketId) {
+    public boolean removeTicketFromQueue(Long branchId, Long requestGroupId, Long segmentId, Long ticketId) {
         String key = buildQueueKey(branchId, requestGroupId, segmentId);
-        redisTemplate.opsForZSet().remove(key, ticketId.toString());
+        Long removedCount = redisTemplate.opsForZSet().remove(key, ticketId.toString());
+        return removedCount != null && removedCount > 0;
     }
 
     public Double getTicketScore(Long branchId, Long requestGroupId, Long segmentId, Long ticketId) {

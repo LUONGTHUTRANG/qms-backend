@@ -29,24 +29,50 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
     private final ObjectMapper objectMapper;
 
     @Value("${API_KEY:kiosk-secret-key-12345}")
-    private String apiKey;
+    private String kioskApiKey;
+
+    @Value("${DISPLAY_API_KEY:display-secret-key-67890}")
+    private String displayApiKey;
 
     // Các endpoint được đi qua mà không cần xác thực
     private final List<String> openApiEndpoints = List.of(
             "/api/v1/auth/login",
             "/api/v1/auth/refresh"
     );
+    private final List<String> kioskApiEndpoints = List.of(
+            "/api/v1/ticket/tickets/create",
+            "/api/v1/management"
+    );
+    private final List<String> displayApiEndpoints = List.of(
+            "/api/v1/ticket/tickets/create",
+            "/api/v1/management",
+            "/api/v1/ticket/tickets/list-by-status",
+            "/api/v1/auth/counter-sessions/active/by-counter"
+    );
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         ServerHttpRequest request = exchange.getRequest();
+        String path = request.getURI().getPath();
 
         // 1. Kiểm tra xem endpoint có được phép truy cập tự do không
         if (isSecured(request)) {
 
             // 1.1 Kiểm tra X-API-Key trước (Dành cho thiết bị Kiosk / Gọi chéo hệ thống)
             List<String> apiKeyHeaders = request.getHeaders().get("X-API-Key");
-            if (apiKeyHeaders != null && !apiKeyHeaders.isEmpty() && apiKey.equals(apiKeyHeaders.get(0))) {
+            if (apiKeyHeaders != null && !apiKeyHeaders.isEmpty()) {
+                String providedKey = apiKeyHeaders.get(0);
+                boolean isAuthorized = false;
+
+                if (kioskApiKey.equals(providedKey)) {
+                    isAuthorized = kioskApiEndpoints.stream().anyMatch(path::startsWith);
+                } else if (displayApiKey.equals(providedKey)) {
+                    isAuthorized = displayApiEndpoints.stream().anyMatch(path::startsWith);
+                }
+
+                if (!isAuthorized) {
+                    return onError(exchange, "API Key is invalid or not allowed for this endpoint", HttpStatus.FORBIDDEN);
+                }
 
                 // Mặc định tạm thời thiết lập ID của Kiosk nếu gọi theo API Key mà không dính user
                 ServerHttpRequest modifiedRequest = exchange.getRequest();
@@ -128,12 +154,6 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
 
     private boolean isSecured(ServerHttpRequest request) {
         String path = request.getURI().getPath();
-        String method = request.getMethod() != null ? request.getMethod().name() : "";
-
-        // Cho phép bypass Auth đối với GET request vào Management service
-        if ("GET".equalsIgnoreCase(method) && path.startsWith("/api/v1/management")) {
-            return false;
-        }
 
         return openApiEndpoints.stream()
                 .noneMatch(uri -> path.contains(uri));

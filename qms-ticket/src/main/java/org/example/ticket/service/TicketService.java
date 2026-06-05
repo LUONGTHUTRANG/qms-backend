@@ -481,33 +481,42 @@ public class TicketService {
         // Nếu quầy làm nhiều nhóm dịch vụ => Cần hợp nhất và sort lại xem ai cao điểm nhất tổng thể
         masterQueue.sort((q1, q2) -> Double.compare(q2.getScore(), q1.getScore())); // Sort Descending
 
+        List<QueueItemDto> topTickets = masterQueue.stream()
+                .limit(10)
+                .collect(Collectors.toList());
+        List<Long> topTicketIds = topTickets.stream()
+                .map(QueueItemDto::getTicketId)
+                .collect(Collectors.toList());
+        List<Ticket> dbTickets = ticketRepository.findAllById(topTicketIds);
+        java.util.Map<Long, Ticket> ticketMap = dbTickets.stream()
+                .collect(Collectors.toMap(Ticket::getId, t -> t));
+
         java.util.Map<Long, CustomerSegmentConfigDto> segmentCache = new java.util.HashMap<>();
+        for (QueueItemDto item : topTickets) {
+            Ticket t = ticketMap.get(item.getTicketId());
 
-        // Fetch ticket number from DB to complete data payload (We could cache this in redis, but to keep memory small DB query is fine since queue shouldn't be 1M long)
-        for (QueueItemDto item : masterQueue) {
-             ticketRepository.findById(item.getTicketId()).ifPresent(t -> {
-                 item.setTicketNo(t.getTicketNo());
-                 item.setCreatedAt(t.getCreatedAt());
+            if (t != null) {
+                item.setTicketNo(t.getTicketNo());
+                item.setCreatedAt(t.getCreatedAt());
 
-                 Long segId = t.getCustomerSegmentId();
-                 if (segId != null) {
-                     CustomerSegmentConfigDto seg = segmentCache.computeIfAbsent(segId, id -> {
-                         try {
-                             return managementClient.getCustomerSegment(id).getData();
-                         } catch (Exception e) {
-                             return null;
-                         }
-                     });
-                     if (seg != null) {
-                         item.setSegmentId(seg.getId());
-                         item.setSegmentCode(seg.getCode());
-                         item.setSegmentName(seg.getName());
-                     }
-                 }
-             });
+                Long segId = t.getCustomerSegmentId();
+                if (segId != null) {
+                    CustomerSegmentConfigDto seg = segmentCache.computeIfAbsent(segId, id -> {
+                        try {
+                            return managementClient.getCustomerSegment(id).getData();
+                        } catch (Exception e) {
+                            return null;
+                        }
+                    });
+                    if (seg != null) {
+                        item.setSegmentId(seg.getId());
+                        item.setSegmentCode(seg.getCode());
+                        item.setSegmentName(seg.getName());
+                    }
+                }
+            }
         }
-
-        return masterQueue;
+        return topTickets;
     }
 
     public QueueItemDto getTopTicketForCounter(Long userId) {
@@ -577,34 +586,49 @@ public class TicketService {
         // Sort theo score descending
         masterSuspendQueue.sort((q1, q2) -> Double.compare(q2.getScore(), q1.getScore()));
 
+        List<org.example.ticket.dto.SuspendedQueueItemDto> topSuspendedTickets = masterSuspendQueue.stream()
+                .limit(10)
+                .collect(Collectors.toList());
+
+        if (topSuspendedTickets.isEmpty()) {
+            return topSuspendedTickets;
+        }
+        List<Long> ticketIds = topSuspendedTickets.stream()
+                .map(org.example.ticket.dto.SuspendedQueueItemDto::getTicketId)
+                .collect(Collectors.toList());
+
+        List<Ticket> dbTickets = ticketRepository.findAllById(ticketIds);
+        java.util.Map<Long, Ticket> ticketMap = dbTickets.stream()
+                .collect(Collectors.toMap(Ticket::getId, t -> t));
+
         java.util.Map<Long, CustomerSegmentConfigDto> segmentCache = new java.util.HashMap<>();
+        for (org.example.ticket.dto.SuspendedQueueItemDto item : topSuspendedTickets) {
+            Ticket t = ticketMap.get(item.getTicketId());
 
-        // Lấy thêm thông tin từ DB (ticketNo, segment, skipExpireAt, rejoinCount)
-        for (org.example.ticket.dto.SuspendedQueueItemDto item : masterSuspendQueue) {
-             ticketRepository.findById(item.getTicketId()).ifPresent(t -> {
-                 item.setTicketNo(t.getTicketNo());
-                 item.setSkipExpireAt(t.getSkipExpireAt());
-                 item.setRejoinCount(t.getRejoinCount());
+            if (t != null) { // Đảm bảo an toàn nếu dữ liệu Redis và MariaDB có độ trễ
+                item.setTicketNo(t.getTicketNo());
+                item.setSkipExpireAt(t.getSkipExpireAt());
+                item.setRejoinCount(t.getRejoinCount());
 
-                 Long segId = t.getCustomerSegmentId();
-                 if (segId != null) {
-                     CustomerSegmentConfigDto seg = segmentCache.computeIfAbsent(segId, id -> {
-                         try {
-                             return managementClient.getCustomerSegment(id).getData();
-                         } catch (Exception e) {
-                             return null;
-                         }
-                     });
-                     if (seg != null) {
-                         item.setSegmentId(seg.getId());
-                         item.setSegmentCode(seg.getCode());
-                         item.setSegmentName(seg.getName());
-                     }
-                 }
-             });
+                Long segId = t.getCustomerSegmentId();
+                if (segId != null) {
+                    CustomerSegmentConfigDto seg = segmentCache.computeIfAbsent(segId, id -> {
+                        try {
+                            return managementClient.getCustomerSegment(id).getData();
+                        } catch (Exception e) {
+                            return null;
+                        }
+                    });
+                    if (seg != null) {
+                        item.setSegmentId(seg.getId());
+                        item.setSegmentCode(seg.getCode());
+                        item.setSegmentName(seg.getName());
+                    }
+                }
+            }
         }
 
-        return masterSuspendQueue;
+        return topSuspendedTickets;
     }
 
     @Transactional
@@ -620,13 +644,69 @@ public class TicketService {
         if (session == null || session.getCounterId() == null) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "User does not have an active counter session");
         }
+        ServiceCounterDto counter = null;
+        try {
+            counter = managementClient.getServiceCounter(session.getCounterId()).getData();
+        } catch (Exception e) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "Failed to retrieve counter information");
+        }
 
-        // Instead of calling getNextTicketsForCounter(userId) which calls auth service again, we can just call it to find the top ticket
-        // Keep it simple visually though, get top ticket using existing method since logic is encapsulated there.
-        QueueItemDto topTicket = getTopTicketForCounter(userId);
+        List<QueueItemDto> candidates = getTopCandidateTicketsFromRedis(counter, 5);
 
-        // Now update status and definitely inject current_counter_id in the same transaction
-        return updateStatusWithCounter(topTicket.getTicketId(), TicketStatus.CALLED, userId, session.getCounterId());
+        if (candidates == null || candidates.isEmpty()) {
+            throw new BusinessException(HttpStatus.NOT_FOUND, "Quầy hiện không có phiếu chờ cần phục vụ.");
+        }
+
+        QueueItemDto selectedTicket = null;
+        for (QueueItemDto candidate : candidates) {
+            boolean isRemoved = redisQueueService.removeTicketFromQueue(
+                    counter.getBranchId(),
+                    candidate.getRequestGroupId(),
+                    candidate.getSegmentId(),
+                    candidate.getTicketId()
+            );
+
+            if (isRemoved) {
+                selectedTicket = candidate; // Xóa thành công, vé này thuộc về quầy hiện tại
+                break;
+            }
+        }
+        if (selectedTicket == null) {
+            // Nếu không xóa được vé nào, nghĩa là các vé đã bị quầy khác "hớt tay trên"
+            throw new BusinessException(HttpStatus.CONFLICT, "Hệ thống bận hoặc vé đã được quầy khác gọi, vui lòng bấm gọi lại.");
+        }
+        return updateStatusWithCounter(selectedTicket.getTicketId(), TicketStatus.CALLED, userId, session.getCounterId(), null, null);
+    }
+    private List<QueueItemDto> getTopCandidateTicketsFromRedis(ServiceCounterDto counter, int limit) {
+        List<QueueItemDto> masterQueue = new java.util.ArrayList<>();
+
+        // Chỉ lặp và lấy dữ liệu thô từ Redis
+        for (Long rgId : counter.getRequestGroupIds()) {
+            for (Long segmentId : counter.getCustomerSegmentIds()) {
+                Set<ZSetOperations.TypedTuple<Object>> rgQueue = redisQueueService.getTicketsInQueue(counter.getBranchId(), rgId, segmentId);
+
+                if (rgQueue != null) {
+                    for (ZSetOperations.TypedTuple<Object> tuple : rgQueue) {
+                        String tIdStr = (String) tuple.getValue();
+                        Long tId = Long.valueOf(tIdStr);
+                        Double negativeScore = tuple.getScore();
+
+                        // Khởi tạo DTO thô, bỏ qua việc query DB lấy tên tuổi
+                        masterQueue.add(QueueItemDto.builder()
+                                .ticketId(tId)
+                                .score(negativeScore != null ? -negativeScore : 0.0)
+                                .requestGroupId(rgId)
+                                .segmentId(segmentId) // Quan trọng để lát nữa truyền vào hàm xóa Redis
+                                .build());
+                    }
+                }
+            }
+        }
+
+        // Sắp xếp và cắt top limit
+        masterQueue.sort((q1, q2) -> Double.compare(q2.getScore(), q1.getScore()));
+
+        return masterQueue.stream().limit(limit).collect(Collectors.toList());
     }
 
     public TicketDto getCurrentTicketForCounter(Long userId) {
