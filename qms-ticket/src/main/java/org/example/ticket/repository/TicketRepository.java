@@ -38,4 +38,6 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
 
     @Query("SELECT t FROM Ticket t WHERE t.status = 'SKIPPED_HOLD' AND t.skipExpireAt IS NOT NULL AND t.skipExpireAt <= :now")
     List<Ticket> findExpiredSkipHoldTickets(@Param("now") LocalDateTime now);
+
+    Optional<Ticket> findByTrackingCode(String trackingCode);
 }

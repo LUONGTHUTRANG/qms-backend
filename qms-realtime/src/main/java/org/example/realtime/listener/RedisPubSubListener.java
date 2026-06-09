@@ -43,14 +43,23 @@ public class RedisPubSubListener implements MessageListener {
 
     private void handleBranchEvent(String channel, String payload) {
         try {
-            // Cấu trúc channel: qms:events:branch:{branchId}:{groupId}:{segmentId}
+            // Cấu trúc channel: qms:events:branch:{branchId}:{groupId}:{segmentId} hoặc qms:events:branch:{branchId}:all
             String[] parts = channel.split(":");
             String branchId = parts[3];
-            String groupId = parts[4];
-            String segmentId = parts[5];
 
-            // Địa chỉ Đích mà Client Angular/ReactJS đang Subscribe trên Socket
-            String webSocketTopic = "/topic/branch/" + branchId + "/" + groupId + "/" + segmentId;
+            String webSocketTopic;
+            if (parts.length == 5 && "all".equals(parts[4])) {
+                // Kênh chung cho toàn chi nhánh
+                webSocketTopic = "/topic/branch/" + branchId + "/all";
+            } else if (parts.length >= 6) {
+                // Kênh riêng lẻ
+                String groupId = parts[4];
+                String segmentId = parts[5];
+                webSocketTopic = "/topic/branch/" + branchId + "/" + groupId + "/" + segmentId;
+            } else {
+                log.warn("Invalid branch event channel format: {}", channel);
+                return;
+            }
 
             // Bắn ngay data (payload) xuống WebSocket
             messagingTemplate.convertAndSend(webSocketTopic, payload);

@@ -34,5 +34,7 @@ public class TicketDto {
     private LocalDateTime doneAt;
     private LocalDateTime cancelledAt;
     private LocalDateTime createdAt;
+    private Integer initialEwt;
+    private String trackingCode;
 }
 

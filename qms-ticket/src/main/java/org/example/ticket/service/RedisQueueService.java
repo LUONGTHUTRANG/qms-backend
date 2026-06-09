@@ -17,6 +17,7 @@ public class RedisQueueService {
     private final RedisTemplate<String, Object> redisTemplate;
     private static final String QUEUE_PREFIX = "qms:queue:";
     private static final String SUSPEND_QUEUE_PREFIX = "qms:suspend_queue:";
+    private static final String EXPIRE_QUEUE_KEY = "qms:suspend_expire_queue";
     private static final long TTL_HOURS = 48;
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd");
 
@@ -90,6 +91,25 @@ public class RedisQueueService {
     public boolean isTicketInSuspendQueue(Long branchId, Long requestGroupId, Long segmentId, Long ticketId) {
         String key = buildSuspendQueueKey(branchId, requestGroupId, segmentId);
         return redisTemplate.opsForHash().hasKey(key, ticketId.toString());
+    }
+
+    // Methods for Expiration Queue (ZSet)
+    public void addTicketToExpireQueue(Long ticketId, long expireTimeMillis) {
+        redisTemplate.opsForZSet().add(EXPIRE_QUEUE_KEY, ticketId.toString(), expireTimeMillis);
+    }
+
+    public void removeTicketFromExpireQueue(Long ticketId) {
+        redisTemplate.opsForZSet().remove(EXPIRE_QUEUE_KEY, ticketId.toString());
+    }
+
+    public Set<String> getExpiredTickets(long currentMillis) {
+        Set<Object> expiredObjects = redisTemplate.opsForZSet().rangeByScore(EXPIRE_QUEUE_KEY, 0, currentMillis);
+        if (expiredObjects == null) {
+            return java.util.Collections.emptySet();
+        }
+        return expiredObjects.stream()
+                .map(Object::toString)
+                .collect(java.util.stream.Collectors.toSet());
     }
 
     // API Cho Policy Chống Đói (Tăng ++ cho Toàn bộ queue)

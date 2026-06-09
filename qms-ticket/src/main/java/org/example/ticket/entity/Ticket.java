@@ -83,5 +83,11 @@ public class Ticket {
     @UpdateTimestamp
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    @Column(name = "initial_ewt")
+    private Integer initialEwt;
+
+    @Column(name = "tracking_code", unique = true, length = 36)
+    private String trackingCode;
 }
 

@@ -45,4 +45,7 @@ public class RequestGroup {
     @UpdateTimestamp
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    @Column(name = "default_serving_time")
+    private Integer defaultServingTime;
 }

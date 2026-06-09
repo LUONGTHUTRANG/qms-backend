@@ -13,4 +13,5 @@ public class RequestGroupDto {
     private String code;
     private String prefixCode;
     private String name;
+    private Integer defaultServingTime;
 }

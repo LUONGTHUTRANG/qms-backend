@@ -63,6 +63,7 @@ public class WebSocketNotifierListener {
 
             String json = objectMapper.writeValueAsString(payload);
             redisTemplate.convertAndSend(channel, json);
+            redisTemplate.convertAndSend("qms:events:branch:" + ticket.getBranchId() + ":all", json);
 
             log.info("Broadcasted NEW_TICKET {} to channel {}", ticket.getTicketNo(), channel);
         } catch (Exception e) {
@@ -86,6 +87,7 @@ public class WebSocketNotifierListener {
             payload.put("ticketNo", ticket.getTicketNo());
             payload.put("oldStatus", oldStatus.name());
             payload.put("newStatus", newStatus.name());
+            payload.put("counterId", ticket.getCurrentCounterId());
 
             // Include queue item data fields - flattened into payload
             if (event.getQueueItemData() != null) {
@@ -107,6 +109,7 @@ public class WebSocketNotifierListener {
 
             String json = objectMapper.writeValueAsString(payload);
             redisTemplate.convertAndSend(channel, json);
+            redisTemplate.convertAndSend("qms:events:branch:" + ticket.getBranchId() + ":all", json);
 
             log.info("Broadcasted status change for ticket {} from {} to {} on channel {}", 
                     ticket.getTicketNo(), oldStatus, newStatus, channel);
@@ -131,6 +134,7 @@ public class WebSocketNotifierListener {
 
             String json = objectMapper.writeValueAsString(payload);
             redisTemplate.convertAndSend(channel, json);
+            redisTemplate.convertAndSend("qms:events:branch:" + ticket.getBranchId() + ":all", json);
 
             log.info("Broadcasted ticket {} removed from queue with status {} on channel {}", 
                     ticket.getTicketNo(), newStatus, channel);

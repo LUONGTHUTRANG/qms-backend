@@ -337,3 +337,18 @@ INSERT INTO reason (code, name, type) VALUES
 -- Lý do tạm dừng/hoãn (Hold/Skip)
 ('H_DOC_WAITING', 'Đợi khách hàng bổ sung hồ sơ', 'HOLD'),
 ('S_CALL_TIMEOUT', 'Gọi quá số lần quy định - Không phản hồi', 'SKIP');
+
+ALTER TABLE bank_qms_management.request_group ADD COLUMN default_serving_time INT NOT NULL DEFAULT 300;
+ALTER TABLE bank_qms_ticket.ticket ADD COLUMN initial_ewt INT DEFAULT 300;
+
+-- Cập nhật cho khách cá nhân
+UPDATE request_group SET default_serving_time = 300 WHERE id = 1;
+UPDATE request_group SET default_serving_time = 600 WHERE id IN (2, 3);
+UPDATE request_group SET default_serving_time = 900 WHERE id = 4;
+UPDATE request_group SET default_serving_time = 1800 WHERE id = 5;
+
+-- Cập nhật cho khách doanh nghiệp
+UPDATE request_group SET default_serving_time = 1200 WHERE id = 6;
+UPDATE request_group SET default_serving_time = 2700 WHERE id IN (7, 8);
+
+ALTER TABLE ticket ADD COLUMN tracking_code VARCHAR(36) UNIQUE;

@@ -137,4 +137,10 @@ public class TicketController {
         LocalDate queryDate = date != null ? date : LocalDate.now();
         return ApiResponse.success(service.getCancelledTickets(branchId, queryDate), "Cancelled tickets retrieved successfully");
     }
+
+    @PermitAll
+    @GetMapping("/tracking/{trackingCode}")
+    public ApiResponse<TicketTrackingDto> getTicketTrackingInfo(@PathVariable("trackingCode") String trackingCode) {
+        return ApiResponse.success(service.getTicketTrackingInfo(trackingCode), "Get estimate time successfully");
+    }
 }

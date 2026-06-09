@@ -44,7 +44,7 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
             "/api/v1/management"
     );
     private final List<String> displayApiEndpoints = List.of(
-            "/api/v1/ticket/tickets/create",
+            "/api/v1/ticket/tickets/counters-current",
             "/api/v1/management",
             "/api/v1/ticket/tickets/list-by-status",
             "/api/v1/auth/counter-sessions/active/by-counter"

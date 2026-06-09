@@ -24,7 +24,7 @@ public class KioskSecurityFilter implements GlobalFilter, Ordered {
         String path = exchange.getRequest().getURI().getPath();
 
         // Chỉ kiểm tra IP đối với API tạo vé của Kiosk
-        if (path.contains("/api/v1/ticket/tickets/create")) {
+        if (path.equals("/api/v1/ticket/tickets/create")) {
             InetSocketAddress remoteAddress = exchange.getRequest().getRemoteAddress();
 
             if (remoteAddress != null) {

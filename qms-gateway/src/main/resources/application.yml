@@ -22,8 +22,8 @@ spring:
           filters:
             - name: RequestRateLimiter
               args:
-                redis-rate-limiter.replenishRate: 1
-                redis-rate-limiter.burstCapacity: 1
+                redis-rate-limiter.replenishRate: 5
+                redis-rate-limiter.burstCapacity: 10
                 key-resolver: "#{@ipKeyResolver}"
         - id: qms-realtime
           uri: http://localhost:8084

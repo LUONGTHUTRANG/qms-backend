@@ -24,7 +24,7 @@ public class RedisQueueSyncListener {
     private final ManagementClient managementClient;
     private final ApplicationEventPublisher eventPublisher;
 
-    @Async
+//    @Async
     @EventListener
     public void processTicketCreationScore(TicketCreatedEvent event) {
         Ticket ticket = event.getTicket();
@@ -62,12 +62,17 @@ public class RedisQueueSyncListener {
                 log.info("Ticket {} newly created. BaseScore: {}, SvcScore: {} -> Total: {}",
                         ticket.getTicketNo(), sBase, sService, totalScore);
             }
+            System.out.println("check totalScore: " + totalScore);
 
+            long timestamp = System.currentTimeMillis();
+            double tieBreakerFraction = timestamp / 1_000_000_000_000_000.0;
+            double finalScore = -totalScore + tieBreakerFraction;
+            System.out.println("check finalScore: " + finalScore);
             // Đẩy vé vào Redis chờ phục vụ (lưu ở Dạng Negative/Âm để thứ tự Sắp xếp ZSET ưu tiên cao ngoi lên đầu)
             // Vì ZSET lấy min trước, còn Score ta đang tính theo điểm hệ 100/50 ... Càng to càng VIP. => Nghịch đảo
-            queueService.addTicketToQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId(), -totalScore.doubleValue());
+            queueService.addTicketToQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId(), finalScore);
 
-            eventPublisher.publishEvent(new TicketQueuedEvent(this, ticket, totalScore.doubleValue()));
+            eventPublisher.publishEvent(new TicketQueuedEvent(this, ticket, finalScore >= 0 ? -finalScore : finalScore));
 
         } catch (Exception e) {
             log.error("Failed to process queue ticket for [{}]: {}", ticket.getTicketNo(), e.getMessage());

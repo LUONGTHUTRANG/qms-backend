@@ -32,6 +32,8 @@ public class RequestGroupDto {
     private String description;
 
     private Boolean isActive;
+
+    private Integer defaultServingTime;
 }
 
 

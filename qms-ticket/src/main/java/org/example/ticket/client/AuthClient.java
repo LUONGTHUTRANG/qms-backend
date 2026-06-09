@@ -13,4 +13,7 @@ public interface AuthClient {
 
     @GetMapping("/api/v1/auth/counter-sessions/active/me")
     ApiResponse<CounterSessionDto> getActiveSession(@RequestHeader("X-Auth-User-Id") Long userId);
+
+    @GetMapping("/api/v1/auth/counter-sessions/active/counter-ids")
+    ApiResponse<List<Long>> getActiveCounterIds();
 }

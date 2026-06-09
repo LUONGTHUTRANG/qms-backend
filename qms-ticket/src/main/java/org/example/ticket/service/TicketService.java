@@ -7,11 +7,8 @@ import org.example.ticket.client.ManagementClient;
 import org.example.ticket.client.dto.CounterSessionDto;
 import org.example.ticket.client.dto.ServiceCounterDto;
 import org.example.ticket.client.dto.CustomerSegmentConfigDto;
-import org.example.ticket.dto.QueueItemDto;
-import org.example.ticket.dto.SuspendedQueueItemDto;
-import org.example.ticket.dto.TicketCreateRequest;
-import org.example.ticket.dto.TicketDto;
-import org.example.ticket.dto.SessionInfoDto;
+import org.example.ticket.client.dto.RequestGroupDto;
+import org.example.ticket.dto.*;
 import org.example.ticket.entity.Ticket;
 import org.example.ticket.entity.TicketEvent;
 import org.example.ticket.entity.TicketSequence;
@@ -25,6 +22,7 @@ import org.example.ticket.repository.TicketEventRepository;
 import org.example.ticket.repository.TicketRepository;
 import org.example.ticket.repository.TicketSequenceRepository;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -50,6 +48,7 @@ public class TicketService {
     private final RedisQueueService redisQueueService;
     private final AuthClient authClient;
     private final ManagementClient managementClient;
+    private final RedisTemplate<String, Object> redisTemplate;
 
     private String generateTicketNumber(Long branchId, LocalDate businessDate, String prefixCode) {
         TicketSequenceId sequenceId = new TicketSequenceId(branchId, businessDate, prefixCode);
@@ -84,6 +83,7 @@ public class TicketService {
                 .serviceTypeId(entity.getServiceTypeId())
                 .customerSegmentId(entity.getCustomerSegmentId())
                 .phoneNumber(entity.getPhoneNumber())
+                .trackingCode(entity.getTrackingCode())
                 .status(entity.getStatus())
                 .rejoinCount(entity.getRejoinCount())
                 .skipExpireAt(entity.getSkipExpireAt())
@@ -96,6 +96,7 @@ public class TicketService {
                 .doneAt(entity.getDoneAt())
                 .cancelledAt(entity.getCancelledAt())
                 .createdAt(entity.getCreatedAt())
+                .initialEwt(entity.getInitialEwt())
                 .build();
     }
 
@@ -130,12 +131,26 @@ public class TicketService {
                 .serviceTypeId(request.getServiceTypeId())
                 .customerSegmentId(request.getCustomerSegmentId())
                 .phoneNumber(request.getPhoneNumber())
+                .trackingCode(java.util.UUID.randomUUID().toString())
                 .status(TicketStatus.WAITING)
                 .rejoinCount(0)
                 .waitCreditSeconds(0)
                 .callAttemptCount(0)
                 .build();
 
+        ticket = ticketRepository.save(ticket);
+
+        eventPublisher.publishEvent(new TicketCreatedEvent(this, ticket));
+
+        Integer initialEwt = calculateEstimatedWaitTime(
+                ticket.getBranchId(),
+                ticket.getRequestGroupId(),
+                ticket.getCustomerSegmentId(),
+                ticket.getId()
+        );
+        System.out.println("check initialEwt: " + initialEwt);
+        ticket.setInitialEwt(initialEwt);
+        System.out.println("check ticket: " + ticket);
         ticket = ticketRepository.save(ticket);
 
         TicketEvent event = TicketEvent.builder()
@@ -145,8 +160,6 @@ public class TicketService {
                 .performedByUserId(userId)
                 .build();
         ticketEventRepository.save(event);
-
-        eventPublisher.publishEvent(new TicketCreatedEvent(this, ticket));
 
         return mapToDto(ticket);
     }
@@ -229,6 +242,11 @@ public class TicketService {
              throw new BusinessException(HttpStatus.BAD_REQUEST, "Ticket is already in status " + newStatus);
          }
 
+         if (oldStatus == TicketStatus.SKIPPED_HOLD && newStatus != TicketStatus.SKIPPED_HOLD) {
+             redisQueueService.removeTicketFromExpireQueue(ticketId);
+             redisQueueService.removeTicketFromSuspendQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticketId);
+         }
+
          ticket.setStatus(newStatus);
 
          TicketEventType eventType = TicketEventType.TRANSFERRED; // Default generic
@@ -283,6 +301,9 @@ public class TicketService {
              }
               // Policy 3: Skip (Lỡ lượt không thấy -> Xóa Queue và Giữ chỗ 15p)
               ticket.setSkipExpireAt(LocalDateTime.now().plusMinutes(15));
+              
+              long expireTimeMillis = ticket.getSkipExpireAt().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+              redisQueueService.addTicketToExpireQueue(ticket.getId(), expireTimeMillis);
 
               Double currentScore = redisQueueService.getTicketScore(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
               
@@ -341,6 +362,7 @@ public class TicketService {
              
              // Xóa khỏi suspend queue nếu đã hết hạn
              redisQueueService.removeTicketFromSuspendQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
+             redisQueueService.removeTicketFromExpireQueue(ticket.getId());
              
              ticketRepository.save(ticket);
              throw new BusinessException(HttpStatus.BAD_REQUEST, "Ticket exceeded skip retry count or expired");
@@ -354,6 +376,7 @@ public class TicketService {
          
          // Xóa khỏi suspend queue
          redisQueueService.removeTicketFromSuspendQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId());
+         redisQueueService.removeTicketFromExpireQueue(ticket.getId());
 
          TicketEvent event = TicketEvent.builder()
                  .ticket(ticket)
@@ -1003,5 +1026,112 @@ public class TicketService {
                             .build();
                 })
                 .collect(Collectors.toList());
+    }
+
+    public Integer calculateEstimatedWaitTime(Long branchId, Long requestGroupId, Long segmentId, Long ticketId) {
+        // 1. Lấy vị trí N của vé trong hàng đợi (ZREVRANK)
+        String queueKey = redisQueueService.buildQueueKey(branchId, requestGroupId, segmentId);
+        Long rank = redisTemplate.opsForZSet().rank(queueKey, ticketId.toString());
+        
+        // Nếu vé chưa có trong queue (hoặc đã bị lấy ra), mặc định N = 0
+        long n = (rank != null) ? rank : 0; 
+
+        // 2. Lấy EMA từ Redis
+        String emaKey = "qms:ema:group:" + requestGroupId + ":segment:" + segmentId;
+        Object emaObj = redisTemplate.opsForValue().get(emaKey);
+        String emaStr = (emaObj != null) ? emaObj.toString() : null;
+        double ema;
+
+        if (emaStr != null) {
+            ema = Double.parseDouble(emaStr);
+        } else {
+            // Fallback: Lấy giá trị SLA mặc định từ qms-management nếu Redis rỗng
+            try {
+                RequestGroupDto groupDto = managementClient.getRequestGroup(requestGroupId).getData();
+                ema = (groupDto != null && groupDto.getDefaultServingTime() != null) 
+                      ? groupDto.getDefaultServingTime() 
+                      : 300.0; // Dự phòng an toàn cuối cùng là 5 phút
+                
+                // Lưu ngay vào Redis để cache cho các lượt sau
+                redisTemplate.opsForValue().set(emaKey, String.valueOf(ema));
+            } catch (Exception e) {
+                ema = 300.0; 
+            }
+        }
+
+        // 3. Lấy số lượng quầy C đang Active phục vụ nhóm này
+        // Lưu ý: Bạn cần viết một hàm gọi sang qms-auth/qms-management để đếm số session active
+        int activeCounters = getActiveCounters(branchId, requestGroupId, segmentId);
+        int c = Math.max(1, activeCounters); // Rào chắn chống kẹt số chia 0
+
+        // 4. Tính toán EWT
+        double ewt = (n * ema) / c;
+        return (int) Math.round(ewt);
+    }
+
+    // Lấy số quầy active phục vụ nhóm dịch vụ và phân khúc này
+    private int getActiveCounters(Long branchId, Long requestGroupId, Long segmentId) {
+        try {
+            // Lấy danh sách ID quầy đang active từ Auth Service
+            java.util.List<Long> activeCounterIds = authClient.getActiveCounterIds().getData();
+            if (activeCounterIds == null || activeCounterIds.isEmpty()) {
+                return 0;
+            }
+
+            // Lấy danh sách quầy theo chi nhánh từ Management Service
+            java.util.List<ServiceCounterDto> countersInBranch = managementClient.getCountersByBranchId(branchId).getData();
+            if (countersInBranch == null || countersInBranch.isEmpty()) {
+                return 0;
+            }
+
+            int activeCount = 0;
+            for (ServiceCounterDto counter : countersInBranch) {
+                // Kiểm tra xem quầy này có đang active không
+                if (activeCounterIds.contains(counter.getId())) {
+                    // Kiểm tra xem quầy này có phục vụ requestGroupId và segmentId không
+                    if (counter.getRequestGroupIds() != null && counter.getRequestGroupIds().contains(requestGroupId)
+                        && counter.getCustomerSegmentIds() != null && counter.getCustomerSegmentIds().contains(segmentId)) {
+                        activeCount++;
+                    }
+                }
+            }
+            return activeCount;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+    public TicketTrackingDto getTicketTrackingInfo(String trackingCode) {
+        Ticket ticket = ticketRepository.findByTrackingCode(trackingCode)
+                .orElseThrow(() -> new RuntimeException("Không tìm thấy thông tin vé"));
+
+        // Nếu vé đã qua lượt hoặc hoàn thành, không cần tính EWT nữa
+        if (ticket.getStatus() != TicketStatus.WAITING) {
+            return TicketTrackingDto.builder()
+                    .ticketNo(ticket.getTicketNo())
+                    .status(ticket.getStatus())
+                    // Gọi thêm Feign lấy tên quầy nếu status là SERVING
+                    .build();
+        }
+
+        // 1. Tính số người xếp trước (N)
+        String queueKey = redisQueueService.buildQueueKey(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId());
+        Long rank = redisTemplate.opsForZSet().rank(queueKey, ticket.getId().toString());
+        int n = (rank != null) ? rank.intValue() : 0;
+
+        // 2. Tính số quầy đang phục vụ (C)
+        int activeCounters = getActiveCounters(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId());
+
+        // 3. Gọi lại hàm tính EWT (đã vá lỗi ở trên)
+        Integer dynamicEwt = calculateEstimatedWaitTime(
+                ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId()
+        );
+
+        return TicketTrackingDto.builder()
+                .ticketNo(ticket.getTicketNo())
+                .status(ticket.getStatus())
+                .peopleAhead(n)
+                .activeCounters(activeCounters) // Trả về số thực tế (có thể là 0 nếu nhân viên đi vệ sinh hết)
+                .estimatedWaitTime(dynamicEwt)
+                .build();
     }
 }
