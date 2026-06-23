@@ -23,8 +23,8 @@ public class CustomerSegmentDto {
     @Size(max = 150, message = "Name must not exceed 150 characters")
     private String name;
 
-    @NotNull(message = "Base priority score is required")
-    private Integer basePriorityScore;
+    @NotNull(message = "Target wait minutes is required")
+    private Integer targetWaitMinutes;
 
     private Boolean isActive;
 }

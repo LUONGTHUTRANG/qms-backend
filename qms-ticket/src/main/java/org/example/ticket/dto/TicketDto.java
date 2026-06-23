@@ -22,10 +22,11 @@ public class TicketDto {
     private Long serviceTypeId;
     private Long customerSegmentId;
     private String phoneNumber;
+    private String trackingCode;
     private TicketStatus status;
     private Integer rejoinCount;
     private LocalDateTime skipExpireAt;
-    private Integer waitCreditSeconds;
+    private Integer carryOverMinutes;
     private Integer callAttemptCount;
     private Long currentCounterId;
     private String currentCounterCode;
@@ -34,7 +35,8 @@ public class TicketDto {
     private LocalDateTime doneAt;
     private LocalDateTime cancelledAt;
     private LocalDateTime createdAt;
+    private LocalDateTime lastQueueEnteredAt;
+    private LocalDateTime lastQueueExitedAt;
     private Integer initialEwt;
-    private String trackingCode;
 }
 

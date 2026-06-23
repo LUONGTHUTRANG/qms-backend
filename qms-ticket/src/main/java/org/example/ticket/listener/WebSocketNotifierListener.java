@@ -124,7 +124,7 @@ public class WebSocketNotifierListener {
         Ticket ticket = event.getTicket();
         TicketStatus newStatus = event.getNewStatus();
 
-        String channel = "qms:events:branch:" + ticket.getBranchId() + ":" + ticket.getRequestGroupId() + ":" + (ticket.getCustomerSegmentId() != null ? ticket.getCustomerSegmentId() : "0");
+        String channel = "qms:events:branch:" + event.getBranchId() + ":" + event.getRequestGroupId() + ":" + (event.getSegmentId() != null ? event.getSegmentId() : "0");
 
         try {
             Map<String, Object> payload = new HashMap<>();
@@ -134,7 +134,7 @@ public class WebSocketNotifierListener {
 
             String json = objectMapper.writeValueAsString(payload);
             redisTemplate.convertAndSend(channel, json);
-            redisTemplate.convertAndSend("qms:events:branch:" + ticket.getBranchId() + ":all", json);
+            redisTemplate.convertAndSend("qms:events:branch:" + event.getBranchId() + ":all", json);
 
             log.info("Broadcasted ticket {} removed from queue with status {} on channel {}", 
                     ticket.getTicketNo(), newStatus, channel);

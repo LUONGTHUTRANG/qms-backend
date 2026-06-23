@@ -69,7 +69,6 @@ public class RequestGroupService {
                 .code(entity.getCode())
                 .name(entity.getName())
                 .averageServiceMinutes(entity.getAverageServiceMinutes())
-                .priorityWeight(entity.getPriorityWeight())
                 .slaMinutes(entity.getSlaMinutes())
                 .isActive(entity.getIsActive())
                 .build();

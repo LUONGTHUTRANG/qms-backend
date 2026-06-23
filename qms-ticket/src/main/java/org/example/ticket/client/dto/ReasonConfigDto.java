@@ -3,11 +3,10 @@ package org.example.ticket.client.dto;
 import lombok.Data;
 
 @Data
-public class ServiceTypeConfigDto {
+public class ReasonConfigDto {
     private Long id;
     private String code;
     private String name;
-    private Integer averageServiceMinutes;
-    private Integer slaMinutes;
+    private String type;
+    private Boolean isActive;
 }
-

@@ -55,8 +55,8 @@ public class Ticket {
     @Column(name = "skip_expire_at")
     private LocalDateTime skipExpireAt;
 
-    @Column(name = "wait_credit_seconds", nullable = false)
-    private Integer waitCreditSeconds;
+    @Column(name = "carry_over_minutes", nullable = false)
+    private Integer carryOverMinutes;
 
     @Column(name = "call_attempt_count", nullable = false)
     private Integer callAttemptCount;
@@ -83,6 +83,12 @@ public class Ticket {
     @UpdateTimestamp
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    @Column(name = "last_queue_entered_at")
+    private LocalDateTime lastQueueEnteredAt;
+
+    @Column(name = "last_queue_exited_at")
+    private LocalDateTime lastQueueExitedAt;
 
     @Column(name = "initial_ewt")
     private Integer initialEwt;

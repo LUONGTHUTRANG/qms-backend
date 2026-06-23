@@ -2,6 +2,7 @@ package org.example.ticket.client;
 
 import org.example.common.dto.ApiResponse;
 import org.example.ticket.client.dto.CustomerSegmentConfigDto;
+import org.example.ticket.client.dto.ReasonConfigDto;
 import org.example.ticket.client.dto.ServiceCounterDto;
 import org.example.ticket.client.dto.ServiceTypeConfigDto;
 import org.example.ticket.client.dto.RequestGroupDto;
@@ -20,6 +21,10 @@ public interface ManagementClient {
     @GetMapping("/api/v1/management/customer-segments/{id}")
     ApiResponse<CustomerSegmentConfigDto> getCustomerSegment(@PathVariable("id") Long id);
 
+    @Cacheable(value = "customerSegments", key = "'all'", unless = "#result == null || #result.data == null")
+    @GetMapping("/api/v1/management/customer-segments")
+    ApiResponse<List<CustomerSegmentConfigDto>> getCustomerSegments();
+
     @Cacheable(value = "serviceTypes", key = "#p0", unless = "#result == null || #result.data == null")
     @GetMapping("/api/v1/management/service-types/{id}")
     ApiResponse<ServiceTypeConfigDto> getServiceType(@PathVariable("id") Long id);
@@ -32,4 +37,7 @@ public interface ManagementClient {
 
     @GetMapping("/api/v1/management/service-counters/by-branch/{branchId}")
     ApiResponse<List<ServiceCounterDto>> getCountersByBranchId(@PathVariable("branchId") Long branchId);
+
+    @GetMapping("/api/v1/management/reasons/{id}")
+    ApiResponse<ReasonConfigDto> getReason(@PathVariable("id") Long id);
 }

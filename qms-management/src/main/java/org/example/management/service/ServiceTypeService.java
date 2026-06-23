@@ -28,7 +28,6 @@ public class ServiceTypeService {
                 .code(entity.getCode())
                 .name(entity.getName())
                 .averageServiceMinutes(entity.getAverageServiceMinutes())
-                .priorityWeight(entity.getPriorityWeight())
                 .slaMinutes(entity.getSlaMinutes())
                 .isActive(entity.getIsActive())
                 .build();
@@ -66,7 +65,6 @@ public class ServiceTypeService {
                 .code(dto.getCode())
                 .name(dto.getName())
                 .averageServiceMinutes(dto.getAverageServiceMinutes() != null ? dto.getAverageServiceMinutes() : 10)
-                .priorityWeight(dto.getPriorityWeight() != null ? dto.getPriorityWeight() : 0)
                 .slaMinutes(dto.getSlaMinutes() != null ? dto.getSlaMinutes() : 15)
                 .isActive(dto.getIsActive() != null ? dto.getIsActive() : true)
                 .build();
@@ -93,7 +91,6 @@ public class ServiceTypeService {
         entity.setName(dto.getName());
         
         if(dto.getAverageServiceMinutes() != null) entity.setAverageServiceMinutes(dto.getAverageServiceMinutes());
-        if(dto.getPriorityWeight() != null) entity.setPriorityWeight(dto.getPriorityWeight());
         if(dto.getSlaMinutes() != null) entity.setSlaMinutes(dto.getSlaMinutes());
         if(dto.getIsActive() != null) entity.setIsActive(dto.getIsActive());
 

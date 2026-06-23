@@ -352,3 +352,61 @@ UPDATE request_group SET default_serving_time = 1200 WHERE id = 6;
 UPDATE request_group SET default_serving_time = 2700 WHERE id IN (7, 8);
 
 ALTER TABLE ticket ADD COLUMN tracking_code VARCHAR(36) UNIQUE;
+
+-- =========================================================
+-- Migration to virtual queue time scoring algorithm
+-- 1 priority unit = 1 minute of queue advantage
+-- =========================================================
+
+USE bank_qms_management;
+
+-- Replace base_priority_score with target_wait_minutes.
+-- target_wait_minutes is the target maximum waiting time for each segment.
+ALTER TABLE customer_segment
+    ADD COLUMN target_wait_minutes INT NULL AFTER name;
+
+UPDATE customer_segment
+SET target_wait_minutes = CASE code
+    WHEN 'BUSINESS' THEN 10
+    WHEN 'PERSONAL' THEN 20
+    ELSE 20
+END
+WHERE target_wait_minutes IS NULL;
+
+ALTER TABLE customer_segment
+    MODIFY COLUMN target_wait_minutes INT NOT NULL;
+
+ALTER TABLE customer_segment
+    DROP COLUMN base_priority_score;
+
+-- Service priority is no longer part of queue ordering.
+ALTER TABLE service_type
+    DROP COLUMN priority_weight;
+
+USE bank_qms_ticket;
+
+-- Replace the old ambiguous wait_credit_seconds field with explicit queue timing fields.
+ALTER TABLE ticket
+    ADD COLUMN carry_over_minutes INT NOT NULL DEFAULT 0 AFTER skip_expire_at,
+    ADD COLUMN last_queue_entered_at DATETIME NULL AFTER updated_at,
+    ADD COLUMN last_queue_exited_at DATETIME NULL AFTER last_queue_entered_at;
+
+UPDATE ticket
+SET carry_over_minutes = CASE
+    WHEN wait_credit_seconds IS NULL THEN 0
+    WHEN wait_credit_seconds < 0 THEN ABS(wait_credit_seconds)
+    ELSE wait_credit_seconds
+END
+WHERE carry_over_minutes = 0;
+
+UPDATE ticket
+SET last_queue_entered_at = COALESCE(last_queue_entered_at, created_at)
+WHERE last_queue_entered_at IS NULL;
+
+UPDATE ticket
+SET last_queue_exited_at = COALESCE(last_queue_exited_at, last_called_at)
+WHERE last_queue_exited_at IS NULL
+  AND last_called_at IS NOT NULL;
+
+ALTER TABLE ticket
+    DROP COLUMN wait_credit_seconds;

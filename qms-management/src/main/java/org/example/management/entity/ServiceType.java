@@ -32,9 +32,6 @@ public class ServiceType {
     @Column(name = "average_service_minutes", nullable = false)
     private Integer averageServiceMinutes;
 
-    @Column(name = "priority_weight", nullable = false)
-    private Integer priorityWeight;
-
     @Column(name = "sla_minutes", nullable = false)
     private Integer slaMinutes;
 

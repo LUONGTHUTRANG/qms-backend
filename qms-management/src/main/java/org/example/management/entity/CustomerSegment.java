@@ -25,8 +25,8 @@ public class CustomerSegment {
     @Column(nullable = false, length = 150)
     private String name;
 
-    @Column(name = "base_priority_score", nullable = false)
-    private Integer basePriorityScore;
+    @Column(name = "target_wait_minutes", nullable = false)
+    private Integer targetWaitMinutes;
 
     @Column(name = "is_active", nullable = false)
     private Boolean isActive;

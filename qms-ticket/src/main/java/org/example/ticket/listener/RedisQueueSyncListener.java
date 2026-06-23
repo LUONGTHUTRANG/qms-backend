@@ -5,77 +5,97 @@ import lombok.extern.slf4j.Slf4j;
 import org.example.common.dto.ApiResponse;
 import org.example.ticket.client.ManagementClient;
 import org.example.ticket.client.dto.CustomerSegmentConfigDto;
-import org.example.ticket.client.dto.ServiceTypeConfigDto;
 import org.example.ticket.entity.Ticket;
 import org.example.ticket.event.TicketCreatedEvent;
 import org.example.ticket.event.TicketQueuedEvent;
 import org.example.ticket.service.RedisQueueService;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.util.Comparator;
+import java.util.List;
 
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class RedisQueueSyncListener {
 
+    private static final int DEFAULT_REFERENCE_TARGET_WAIT_MINUTES = 20;
+
     private final RedisQueueService queueService;
     private final ManagementClient managementClient;
     private final ApplicationEventPublisher eventPublisher;
 
-//    @Async
     @EventListener
     public void processTicketCreationScore(TicketCreatedEvent event) {
         Ticket ticket = event.getTicket();
-        Integer totalScore = 0;
 
         try {
-            if (event.isTransfer()) {
-                // Chính sách 5: Chuyển quầy
-                totalScore = event.getOldTotalScore();
-                if (event.isHasTransferBonus()) {
-                    totalScore += 50;
-                }
-                log.info("Ticket {} transferred. Total Score: {}", ticket.getTicketNo(), totalScore);
-
-            } else if (event.getOldTotalScore() != null) {
-                // Chính sách 4: Rejoin (vào lại)
-                totalScore = event.getOldTotalScore() - 30;
-                log.info("Ticket {} rejoined. Total Score after penalty: {}", ticket.getTicketNo(), totalScore);
-
-            } else {
-                // Chính sách 1: Lấy vé mới
-                // Tính S_base
-                ApiResponse<CustomerSegmentConfigDto> segResponse = managementClient.getCustomerSegment(ticket.getCustomerSegmentId());
-                int sBase = segResponse.getData() != null ? segResponse.getData().getBasePriorityScore() : 0;
-
-                // Tính S_service
-                int sService = 0;
-                if (ticket.getServiceTypeId() != null) {
-                   ApiResponse<ServiceTypeConfigDto> svResponse = managementClient.getServiceType(ticket.getServiceTypeId());
-                   sService = svResponse.getData() != null && svResponse.getData().getPriorityWeight() != null
-                           ? svResponse.getData().getPriorityWeight() : 0;
-                }
-
-                totalScore = sBase + sService;
-                log.info("Ticket {} newly created. BaseScore: {}, SvcScore: {} -> Total: {}",
-                        ticket.getTicketNo(), sBase, sService, totalScore);
+            CustomerSegmentConfigDto segment = null;
+            ApiResponse<CustomerSegmentConfigDto> segmentResponse =
+                    managementClient.getCustomerSegment(ticket.getCustomerSegmentId());
+            if (segmentResponse != null) {
+                segment = segmentResponse.getData();
             }
-            System.out.println("check totalScore: " + totalScore);
 
-            long timestamp = System.currentTimeMillis();
-            double tieBreakerFraction = timestamp / 1_000_000_000_000_000.0;
-            double finalScore = -totalScore + tieBreakerFraction;
-            System.out.println("check finalScore: " + finalScore);
-            // Đẩy vé vào Redis chờ phục vụ (lưu ở Dạng Negative/Âm để thứ tự Sắp xếp ZSET ưu tiên cao ngoi lên đầu)
-            // Vì ZSET lấy min trước, còn Score ta đang tính theo điểm hệ 100/50 ... Càng to càng VIP. => Nghịch đảo
-            queueService.addTicketToQueue(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId(), finalScore);
+            int segmentCreditMinutes = calculateSegmentCreditMinutes(segment);
+            int carryOverMinutes = ticket.getCarryOverMinutes() != null ? ticket.getCarryOverMinutes() : 0;
+            LocalDateTime queueEnteredAt = ticket.getLastQueueEnteredAt() != null
+                    ? ticket.getLastQueueEnteredAt()
+                    : (ticket.getCreatedAt() != null ? ticket.getCreatedAt() : LocalDateTime.now());
 
-            eventPublisher.publishEvent(new TicketQueuedEvent(this, ticket, finalScore >= 0 ? -finalScore : finalScore));
+            double virtualQueueScore = queueEnteredAt.atZone(ZoneId.systemDefault()).toEpochSecond()
+                    - (long) (segmentCreditMinutes + carryOverMinutes) * 60;
 
+            queueService.addTicketToQueue(
+                    ticket.getBranchId(),
+                    ticket.getRequestGroupId(),
+                    ticket.getCustomerSegmentId(),
+                    ticket.getId(),
+                    virtualQueueScore
+            );
+
+            double initialPriorityMinutes = segmentCreditMinutes + carryOverMinutes;
+            eventPublisher.publishEvent(new TicketQueuedEvent(this, ticket, initialPriorityMinutes));
+
+            log.info(
+                    "Queued ticket {} with virtualQueueScore={}, segmentCreditMinutes={}, carryOverMinutes={}",
+                    ticket.getTicketNo(),
+                    virtualQueueScore,
+                    segmentCreditMinutes,
+                    carryOverMinutes
+            );
         } catch (Exception e) {
-            log.error("Failed to process queue ticket for [{}]: {}", ticket.getTicketNo(), e.getMessage());
+            log.error("Failed to process queue ticket for [{}]: {}", ticket.getTicketNo(), e.getMessage(), e);
+        }
+    }
+
+    private int calculateSegmentCreditMinutes(CustomerSegmentConfigDto segment) {
+        if (segment == null || segment.getTargetWaitMinutes() == null) {
+            return 0;
+        }
+
+        int referenceTargetWait = getReferenceTargetWaitMinutes();
+        return Math.max(0, referenceTargetWait - segment.getTargetWaitMinutes());
+    }
+
+    private int getReferenceTargetWaitMinutes() {
+        try {
+            ApiResponse<List<CustomerSegmentConfigDto>> response = managementClient.getCustomerSegments();
+            if (response == null || response.getData() == null || response.getData().isEmpty()) {
+                return DEFAULT_REFERENCE_TARGET_WAIT_MINUTES;
+            }
+
+            return response.getData().stream()
+                    .map(CustomerSegmentConfigDto::getTargetWaitMinutes)
+                    .filter(value -> value != null && value > 0)
+                    .max(Comparator.naturalOrder())
+                    .orElse(DEFAULT_REFERENCE_TARGET_WAIT_MINUTES);
+        } catch (Exception e) {
+            return DEFAULT_REFERENCE_TARGET_WAIT_MINUTES;
         }
     }
 }

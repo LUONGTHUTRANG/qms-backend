@@ -23,7 +23,7 @@ public class CustomerSegmentService {
                 .id(entity.getId())
                 .code(entity.getCode())
                 .name(entity.getName())
-                .basePriorityScore(entity.getBasePriorityScore())
+                .targetWaitMinutes(entity.getTargetWaitMinutes())
                 .isActive(entity.getIsActive())
                 .build();
     }
@@ -49,7 +49,7 @@ public class CustomerSegmentService {
         CustomerSegment entity = CustomerSegment.builder()
                 .code(dto.getCode())
                 .name(dto.getName())
-                .basePriorityScore(dto.getBasePriorityScore())
+                .targetWaitMinutes(dto.getTargetWaitMinutes())
                 .isActive(dto.getIsActive() != null ? dto.getIsActive() : true)
                 .build();
 
@@ -67,7 +67,7 @@ public class CustomerSegmentService {
 
         entity.setCode(dto.getCode());
         entity.setName(dto.getName());
-        entity.setBasePriorityScore(dto.getBasePriorityScore());
+        entity.setTargetWaitMinutes(dto.getTargetWaitMinutes());
         if (dto.getIsActive() != null) {
             entity.setIsActive(dto.getIsActive());
         }

@@ -27,7 +27,6 @@ public class ServiceTypeDto {
     private String name;
 
     private Integer averageServiceMinutes;
-    private Integer priorityWeight;
     private Integer slaMinutes;
 
     private Boolean isActive;

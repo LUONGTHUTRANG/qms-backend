@@ -131,11 +131,9 @@ public class TicketController {
     }
 
     @GetMapping("/cancelled-tickets")
-    public ApiResponse<List<TicketDto>> getCancelledTickets(
-            @RequestParam("branchId") Long branchId,
-            @RequestParam(value = "date", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
-        LocalDate queryDate = date != null ? date : LocalDate.now();
-        return ApiResponse.success(service.getCancelledTickets(branchId, queryDate), "Cancelled tickets retrieved successfully");
+    public ApiResponse<List<TicketDto>> getCancelledTickets() {
+        Long userId = UserContextHolder.getUserId();
+        return ApiResponse.success(service.getCancelledTicketsForCounter(userId), "Cancelled tickets retrieved successfully");
     }
 
     @PermitAll

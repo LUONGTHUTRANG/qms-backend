@@ -9,6 +9,6 @@ public class CustomerSegmentConfigDto implements Serializable {
     private Long id;
     private String code;
     private String name;
-    private Integer basePriorityScore;
+    private Integer targetWaitMinutes;
 }
 
