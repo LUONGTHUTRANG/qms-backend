@@ -27,6 +27,13 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
             @Param("statuses") List<TicketStatus> statuses
     );
 
+    @Query("SELECT t FROM Ticket t WHERE t.currentCounterId IN :counterIds AND t.status IN :statuses AND t.businessDate = :businessDate")
+    List<Ticket> findByCurrentCounterIdsAndStatusesAndBusinessDate(
+            @Param("counterIds") List<Long> counterIds,
+            @Param("statuses") List<TicketStatus> statuses,
+            @Param("businessDate") LocalDate businessDate
+    );
+
     @Query("SELECT t FROM Ticket t WHERE t.status = :status ORDER BY t.lastCalledAt DESC NULLS LAST")
     List<Ticket> findByStatusOrderByLastCalledAtDesc(@Param("status") TicketStatus status);
 

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.jsonwebtoken.Claims;
 import lombok.RequiredArgsConstructor;
 import org.example.common.dto.ApiResponse;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
@@ -15,9 +16,9 @@ import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.stereotype.Component;
+import org.springframework.util.AntPathMatcher;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
-import org.springframework.beans.factory.annotation.Value;
 
 import java.util.List;
 
@@ -27,6 +28,7 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
 
     private final JwtUtil jwtUtil;
     private final ObjectMapper objectMapper;
+    private final AntPathMatcher pathMatcher = new AntPathMatcher();
 
     @Value("${API_KEY:kiosk-secret-key-12345}")
     private String kioskApiKey;
@@ -34,15 +36,20 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
     @Value("${DISPLAY_API_KEY:display-secret-key-67890}")
     private String displayApiKey;
 
-    // Các endpoint được đi qua mà không cần xác thực
-    private final List<String> openApiEndpoints = List.of(
+    // Public endpoints that do not require JWT or API key.
+    private final List<String> openApiPatterns = List.of(
             "/api/v1/auth/login",
-            "/api/v1/auth/refresh"
+            "/api/v1/auth/refresh",
+            "/api/v1/ticket/tickets/tracking/**",
+            "/ws",
+            "/ws/**"
     );
+
     private final List<String> kioskApiEndpoints = List.of(
             "/api/v1/ticket/tickets/create",
             "/api/v1/management"
     );
+
     private final List<String> displayApiEndpoints = List.of(
             "/api/v1/ticket/tickets/counters-current",
             "/api/v1/management",
@@ -55,10 +62,7 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
         ServerHttpRequest request = exchange.getRequest();
         String path = request.getURI().getPath();
 
-        // 1. Kiểm tra xem endpoint có được phép truy cập tự do không
         if (isSecured(request)) {
-
-            // 1.1 Kiểm tra X-API-Key trước (Dành cho thiết bị Kiosk / Gọi chéo hệ thống)
             List<String> apiKeyHeaders = request.getHeaders().get("X-API-Key");
             if (apiKeyHeaders != null && !apiKeyHeaders.isEmpty()) {
                 String providedKey = apiKeyHeaders.get(0);
@@ -74,36 +78,31 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
                     return onError(exchange, "API Key is invalid or not allowed for this endpoint", HttpStatus.FORBIDDEN);
                 }
 
-                // Mặc định tạm thời thiết lập ID của Kiosk nếu gọi theo API Key mà không dính user
                 ServerHttpRequest modifiedRequest = exchange.getRequest();
-
-                // NẾU LÀ GỌI BẰNG API KEY MÀ KHÔNG CÓ JWT TOKEN -> GÁN MỘT USER ID GIẢ HOẶC CHẠY THẲNG
                 boolean hasValidUser = false;
 
                 if (request.getHeaders().containsKey(HttpHeaders.AUTHORIZATION)) {
                     String authHeader = request.getHeaders().get(HttpHeaders.AUTHORIZATION).get(0);
                     if (authHeader != null && authHeader.startsWith("Bearer ")) {
-                         String token = authHeader.substring(7);
-                         if (jwtUtil.isTokenValid(token)) {
-                             Claims claims = jwtUtil.extractAllClaims(token);
-                             String username = claims.getSubject();
-                             String role = claims.get("role", String.class);
-                             Object branchId = claims.get("branchId");
-                             Object userId = claims.get("userId");
+                        String token = authHeader.substring(7);
+                        if (jwtUtil.isTokenValid(token)) {
+                            Claims claims = jwtUtil.extractAllClaims(token);
+                            String username = claims.getSubject();
+                            String role = claims.get("role", String.class);
+                            Object branchId = claims.get("branchId");
+                            Object userId = claims.get("userId");
 
-                             modifiedRequest = exchange.getRequest().mutate()
-                                     .header("X-Auth-Username", username)
-                                     .header("X-Auth-Role", role)
-                                     .header("X-Auth-Branch-Id", branchId != null ? branchId.toString() : "")
-                                     .header("X-Auth-User-Id", userId != null ? userId.toString() : "")
-                                     .build();
-                             hasValidUser = true;
-                         }
+                            modifiedRequest = exchange.getRequest().mutate()
+                                    .header("X-Auth-Username", username)
+                                    .header("X-Auth-Role", role)
+                                    .header("X-Auth-Branch-Id", branchId != null ? branchId.toString() : "")
+                                    .header("X-Auth-User-Id", userId != null ? userId.toString() : "")
+                                    .build();
+                            hasValidUser = true;
+                        }
                     }
                 }
 
-                // Fix lỗi báo Required header is missing. Ngay cả khi có API key, Auth Controller bắt buộc phải có User-Id
-                // Do đó, ta truyền một giá trị rỗng/loại để Controller biết nó vẫn đi qua Gateway an toàn chứ ko phải Bypass
                 if (!hasValidUser) {
                     modifiedRequest = exchange.getRequest().mutate()
                             .header("X-Auth-User-Id", "")
@@ -113,7 +112,6 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
                 return chain.filter(exchange.mutate().request(modifiedRequest).build());
             }
 
-            // 2. Kiểm tra Header Authorization
             if (!request.getHeaders().containsKey(HttpHeaders.AUTHORIZATION)) {
                 return onError(exchange, "Missing Authorization Header or Valid API Key", HttpStatus.UNAUTHORIZED);
             }
@@ -124,13 +122,10 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
             }
 
             String token = authHeader.substring(7);
-
-            // 3. Giải mã và kiểm tra JWT token tại Gateway
             if (!jwtUtil.isTokenValid(token)) {
                 return onError(exchange, "Invalid or expired JWT token", HttpStatus.UNAUTHORIZED);
             }
 
-            // 4. Extract data and modify the request headers for downstream services
             Claims claims = jwtUtil.extractAllClaims(token);
             String username = claims.getSubject();
             String role = claims.get("role", String.class);
@@ -144,19 +139,15 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
                     .header("X-Auth-User-Id", userId != null ? userId.toString() : "")
                     .build();
 
-            // 5. Cấp quyền đi tiếp tới các service con cùng với Custom Header
             return chain.filter(exchange.mutate().request(modifiedRequest).build());
         }
 
-        // Điểm hở - bypass luôn không cần JWT
         return chain.filter(exchange);
     }
 
     private boolean isSecured(ServerHttpRequest request) {
         String path = request.getURI().getPath();
-
-        return openApiEndpoints.stream()
-                .noneMatch(uri -> path.contains(uri));
+        return openApiPatterns.stream().noneMatch(pattern -> pathMatcher.match(pattern, path));
     }
 
     private Mono<Void> onError(ServerWebExchange exchange, String errorMessage, HttpStatus httpStatus) {
@@ -177,6 +168,6 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
 
     @Override
     public int getOrder() {
-        return -1; // Chạy trước các filter khác
+        return -1;
     }
 }

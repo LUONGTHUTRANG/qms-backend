@@ -12,5 +12,6 @@ public class TicketTrackingDto  {
     private String currentCounterCode;
     private int peopleAhead;
     private int activeCounters;
-    private int estimatedWaitTime;
+    private Integer estimatedWaitTime;
+    private Boolean serviceAvailable;
 }

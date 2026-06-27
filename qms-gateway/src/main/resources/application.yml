@@ -6,6 +6,8 @@ spring:
     name: qms-gateway
   cloud:
     gateway:
+      default-filters:
+        - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials, RETAIN_LAST
       routes:
         - id: qms-auth
           uri: http://localhost:8081
@@ -25,6 +27,15 @@ spring:
                 redis-rate-limiter.replenishRate: 5
                 redis-rate-limiter.burstCapacity: 10
                 key-resolver: "#{@ipKeyResolver}"
+        - id: qms-realtime-ws
+          uri: ws://localhost:8084
+          predicates:
+            - Path=/ws,/ws/**
+            - Header=Upgrade, websocket
+        - id: qms-realtime-sockjs
+          uri: http://localhost:8084
+          predicates:
+            - Path=/ws,/ws/**
         - id: qms-realtime
           uri: http://localhost:8084
           predicates:
@@ -43,3 +54,7 @@ spring:
 
 jwt:
   secret: YmFua1Ftc0JlU2VjcmV0S2V5TXVzdEJlQXRMZWFzdDMyQnl0ZXM=
+
+security:
+  allowed-ips: ${ALLOWED_IPS:127.0.0.1,0:0:0:0:0:0:0:1}
+  public-ip-bypass-patterns: ${PUBLIC_IP_BYPASS_PATTERNS:/api/v1/ticket/tickets/tracking/**}

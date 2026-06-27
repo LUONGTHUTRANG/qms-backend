@@ -1,30 +1,46 @@
 package org.example.realtime.config;
 
+import org.example.realtime.security.GatewayHandshakeInterceptor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
 
+import java.util.Arrays;
+import java.util.List;
+
 @Configuration
 @EnableWebSocketMessageBroker
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
+    private final GatewayHandshakeInterceptor gatewayHandshakeInterceptor;
+    private final List<String> allowedOriginPatterns;
+
+    public WebSocketConfig(
+            GatewayHandshakeInterceptor gatewayHandshakeInterceptor,
+            @Value("${app.websocket.allowed-origin-patterns:http://localhost:8080,http://localhost:3000,http://localhost:5173}")
+            String allowedOriginPatterns) {
+        this.gatewayHandshakeInterceptor = gatewayHandshakeInterceptor;
+        this.allowedOriginPatterns = Arrays.stream(allowedOriginPatterns.split(","))
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .toList();
+    }
+
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
-        // Điểm kết nối (endpoint) mà Frontend (React, Vue) sẽ kết nối vào
+        // Realtime endpoint is expected to be reached through the gateway and still supports SockJS fallback.
         registry.addEndpoint("/ws")
-                .setAllowedOriginPatterns("*")
-                .withSockJS(); // Hỗ trợ fallback nếu browser không hỗ trợ WebSocket
+                .setAllowedOriginPatterns(allowedOriginPatterns.toArray(String[]::new))
+                .addInterceptors(gatewayHandshakeInterceptor)
+                .withSockJS();
     }
 
     @Override
     public void configureMessageBroker(MessageBrokerRegistry registry) {
-        // Tiền tố cho các kênh (topic) mà Client có thể Subscribe để nghe thông báo
         registry.enableSimpleBroker("/topic");
-        
-        // Tiền tố cho các endpoint mà Client gửi tin nhắn LÊN Server (Giả sử Client muốn chủ động chat)
         registry.setApplicationDestinationPrefixes("/app");
     }
 }
-

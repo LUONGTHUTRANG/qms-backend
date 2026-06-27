@@ -16,7 +16,6 @@ import org.example.ticket.entity.TicketSequence;
 import org.example.ticket.entity.TicketSequenceId;
 import org.example.ticket.entity.enums.TicketEventType;
 import org.example.ticket.entity.enums.TicketStatus;
-import org.example.ticket.event.TicketCreatedEvent;
 import org.example.ticket.event.TicketStatusChangedEvent;
 import org.example.ticket.event.TicketRemovedFromQueueEvent;
 import org.example.ticket.repository.TicketEventRepository;
@@ -34,6 +33,11 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -50,6 +54,8 @@ public class TicketService {
     private final RedisQueueService redisQueueService;
     private final AuthClient authClient;
     private final ManagementClient managementClient;
+    private final EstimatedWaitTimeService estimatedWaitTimeService;
+    private final TicketQueueCoordinatorService ticketQueueCoordinatorService;
     private final RedisTemplate<String, Object> redisTemplate;
 
     private String generateTicketNumber(Long branchId, LocalDate businessDate, String prefixCode) {
@@ -249,9 +255,9 @@ public class TicketService {
 
         ticket = ticketRepository.save(ticket);
 
-        eventPublisher.publishEvent(new TicketCreatedEvent(this, ticket));
+        ticketQueueCoordinatorService.enqueueWaitingTicket(ticket);
 
-        Integer initialEwt = calculateEstimatedWaitTime(
+        Integer initialEwt = estimatedWaitTimeService.calculateEstimatedWaitTime(
                 ticket.getBranchId(),
                 ticket.getRequestGroupId(),
                 ticket.getCustomerSegmentId(),
@@ -533,7 +539,7 @@ public class TicketService {
                 .build();
         ticketEventRepository.save(event);
 
-        eventPublisher.publishEvent(new TicketCreatedEvent(this, ticket));
+        ticketQueueCoordinatorService.enqueueWaitingTicket(ticket);
         eventPublisher.publishEvent(buildTicketStatusChangedEvent(ticket, oldStatus));
         return mapToDto(ticket);
     }
@@ -585,7 +591,7 @@ public class TicketService {
                 .build();
         ticketEventRepository.save(event);
 
-        eventPublisher.publishEvent(new TicketCreatedEvent(this, ticket));
+        ticketQueueCoordinatorService.enqueueWaitingTicket(ticket);
         if (oldStatus == TicketStatus.WAITING || oldStatus == TicketStatus.CALLED) {
             eventPublisher.publishEvent(new TicketRemovedFromQueueEvent(
                     this,
@@ -619,6 +625,8 @@ public class TicketService {
             || counter.getCustomerSegmentIds() == null || counter.getCustomerSegmentIds().isEmpty()) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "Counter is not configured to serve any request groups or customer segments");
         }
+
+        restoreMissingWaitingTicketsForCounter(counter);
 
         List<QueueItemDto> masterQueue = new java.util.ArrayList<>();
         java.util.Map<Long, String> requestGroupNameCache = new java.util.HashMap<>();
@@ -825,6 +833,13 @@ public class TicketService {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "Failed to retrieve counter information");
         }
 
+        if (counter == null || counter.getRequestGroupIds() == null || counter.getRequestGroupIds().isEmpty()
+                || counter.getCustomerSegmentIds() == null || counter.getCustomerSegmentIds().isEmpty()) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "Counter is not configured to serve any request groups or customer segments");
+        }
+
+        restoreMissingWaitingTicketsForCounter(counter);
+
         List<QueueItemDto> candidates = getTopCandidateTicketsFromRedis(counter, 5);
 
         if (candidates == null || candidates.isEmpty()) {
@@ -930,6 +945,45 @@ public class TicketService {
             }
         }
         return topics;
+    }
+
+    private void restoreMissingWaitingTicketsForCounter(ServiceCounterDto counter) {
+        List<Ticket> waitingTickets = ticketRepository.findByBranchIdAndBusinessDateAndStatus(
+                counter.getBranchId(),
+                LocalDate.now(),
+                TicketStatus.WAITING
+        );
+
+        if (waitingTickets == null || waitingTickets.isEmpty()) {
+            return;
+        }
+
+        Set<Long> allowedRequestGroupIds = counter.getRequestGroupIds();
+        Set<Long> allowedCustomerSegmentIds = counter.getCustomerSegmentIds();
+
+        for (Ticket waitingTicket : waitingTickets) {
+            Long requestGroupId = waitingTicket.getRequestGroupId();
+            Long segmentId = waitingTicket.getCustomerSegmentId();
+
+            if (requestGroupId == null || segmentId == null) {
+                continue;
+            }
+
+            if (!allowedRequestGroupIds.contains(requestGroupId) || !allowedCustomerSegmentIds.contains(segmentId)) {
+                continue;
+            }
+
+            Double queueScore = redisQueueService.getTicketScore(
+                    waitingTicket.getBranchId(),
+                    requestGroupId,
+                    segmentId,
+                    waitingTicket.getId()
+            );
+
+            if (queueScore == null) {
+                ticketQueueCoordinatorService.enqueueWaitingTicket(waitingTicket);
+            }
+        }
     }
 
     public SessionInfoDto getSessionInfo(Long userId) {
@@ -1203,15 +1257,20 @@ public class TicketService {
 
     public Integer calculateEstimatedWaitTime(Long branchId, Long requestGroupId, Long segmentId, Long ticketId) {
         // 1. Láº¥y vá»‹ trÃ­ N cá»§a vÃ© trong hÃ ng Ä‘á»£i (ZREVRANK)
-        String queueKey = redisQueueService.buildQueueKey(branchId, requestGroupId, segmentId);
-        Long rank = redisTemplate.opsForZSet().rank(queueKey, ticketId.toString());
+        Integer delegatedEstimatedWaitTime = estimatedWaitTimeService.calculateEstimatedWaitTime(
+                branchId,
+                requestGroupId,
+                segmentId,
+                ticketId
+        );
+        Long rank = delegatedEstimatedWaitTime != null ? delegatedEstimatedWaitTime.longValue() : 0L;
         
         // Náº¿u vÃ© chÆ°a cÃ³ trong queue (hoáº·c Ä‘Ã£ bá»‹ láº¥y ra), máº·c Ä‘á»‹nh N = 0
         long n = (rank != null) ? rank : 0; 
 
         // 2. Láº¥y EMA tá»« Redis
-        String emaKey = "qms:ema:group:" + requestGroupId + ":segment:" + segmentId;
-        Object emaObj = redisTemplate.opsForValue().get(emaKey);
+        String emaKey = "1";
+        Object emaObj = "1";
         String emaStr = (emaObj != null) ? emaObj.toString() : null;
         double ema;
 
@@ -1234,7 +1293,7 @@ public class TicketService {
 
         // 3. Láº¥y sá»‘ lÆ°á»£ng quáº§y C Ä‘ang Active phá»¥c vá»¥ nhÃ³m nÃ y
         // LÆ°u Ã½: Báº¡n cáº§n viáº¿t má»™t hÃ m gá»i sang qms-auth/qms-management Ä‘á»ƒ Ä‘áº¿m sá»‘ session active
-        int activeCounters = getActiveCounters(branchId, requestGroupId, segmentId);
+        int activeCounters = 1;
         int c = Math.max(1, activeCounters); // RÃ o cháº¯n chá»‘ng káº¹t sá»‘ chia 0
 
         // 4. TÃ­nh toÃ¡n EWT
@@ -1287,17 +1346,17 @@ public class TicketService {
         }
 
         // 1. TÃ­nh sá»‘ ngÆ°á»i xáº¿p trÆ°á»›c (N)
-        String queueKey = redisQueueService.buildQueueKey(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId());
-        Long rank = redisTemplate.opsForZSet().rank(queueKey, ticket.getId().toString());
+        WaitEstimateDto waitEstimate = estimatedWaitTimeService.estimate(
+                ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId()
+        );
+        Long rank = (long) waitEstimate.peopleAhead();
         int n = (rank != null) ? rank.intValue() : 0;
 
         // 2. TÃ­nh sá»‘ quáº§y Ä‘ang phá»¥c vá»¥ (C)
-        int activeCounters = getActiveCounters(ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId());
+        int activeCounters = waitEstimate.activeCounters();
 
         // 3. Gá»i láº¡i hÃ m tÃ­nh EWT (Ä‘Ã£ vÃ¡ lá»—i á»Ÿ trÃªn)
-        Integer dynamicEwt = calculateEstimatedWaitTime(
-                ticket.getBranchId(), ticket.getRequestGroupId(), ticket.getCustomerSegmentId(), ticket.getId()
-        );
+        Integer dynamicEwt = waitEstimate.estimatedWaitTime();
 
         return TicketTrackingDto.builder()
                 .ticketNo(ticket.getTicketNo())
@@ -1305,6 +1364,7 @@ public class TicketService {
                 .peopleAhead(n)
                 .activeCounters(activeCounters) // Tráº£ vá» sá»‘ thá»±c táº¿ (cÃ³ thá»ƒ lÃ  0 náº¿u nhÃ¢n viÃªn Ä‘i vá»‡ sinh háº¿t)
                 .estimatedWaitTime(dynamicEwt)
+                .serviceAvailable(waitEstimate.serviceAvailable())
                 .build();
     }
 }
